@@ -1,0 +1,805 @@
+# © 2024-25 Infosys Limited, Bangalore, India. All Rights Reserved.
+import uuid
+import asyncpg
+from sqlalchemy import create_engine,text
+from sqlalchemy.orm import sessionmaker
+from fastapi import HTTPException
+from motor.motor_asyncio import AsyncIOMotorClient
+from telemetry_wrapper import logger as log, update_session_context
+import os
+from src.utils.secrets_handler import current_user_department, current_user_email
+
+UPLOAD_DIR = "uploaded_sqlite_dbs"
+os.makedirs(UPLOAD_DIR, exist_ok=True)
+
+
+class MultiDBConnectionManager:
+    def __init__(self):
+        self.sql_engines = {}
+        self.sql_sessions = {}
+        self.mongo_clients = {}
+        self.mongo_databases = {}
+
+        self.pg_host = os.getenv("POSTGRESQL_HOST", "localhost")
+        self.pg_port = os.getenv("POSTGRESQL_PORT", "5432")
+        self.pg_user = os.getenv("POSTGRESQL_USER", "postgres")
+        self.pg_password = os.getenv("POSTGRESQL_PASSWORD", "postgres")
+        self.pg_database = os.getenv("DATABASE", "agentic_workflow_as_Service_database")
+        self.table_name = "db_connections_table"
+        # ✅ Add metadata engine attributes
+        self._metadata_engine = None
+        self._metadata_session_factory = None
+
+    # SQL management
+    def _decrypt_connection_password(self, encrypted: str) -> str:
+        """Decrypt a Fernet-encrypted credential stored in ``db_connections_table``.
+
+        Falls back to returning the value as-is when decryption fails
+        (e.g. legacy rows that were saved as plaintext before encryption
+        was introduced).
+        """
+        if not encrypted:
+            return encrypted
+        try:
+            from cryptography.fernet import Fernet
+            master_key = os.getenv("SECRETS_MASTER_KEY", "")
+            if not master_key:
+                return encrypted  # Cannot decrypt without key — return raw
+            cipher = Fernet(master_key.encode()[:44].ljust(44, b'='))
+            return cipher.decrypt(encrypted.encode("utf-8")).decode("utf-8")
+        except Exception:
+            # Legacy unencrypted value — return as-is
+            return encrypted
+
+    def _fetch_connection_config_sync(self, connection_name: str) -> dict:
+        """
+        Synchronously fetch connection config from PostgreSQL using SQLAlchemy.
+        
+        Args:
+            connection_name: Name of the connection to retrieve
+            
+        Returns:
+            dict: Connection configuration
+            
+        Raises:
+            Exception: If connection not found or database error
+        """
+        session = None
+        try:
+            # ✅ Create metadata engine if not exists
+            if self._metadata_engine is None:
+                db_url = f"postgresql://{self.pg_user}:{self.pg_password}@{self.pg_host}:{self.pg_port}/{self.pg_database}"
+                self._metadata_engine = create_engine(db_url, pool_size=5, max_overflow=5, echo=False, future=True)
+                self._metadata_session_factory = sessionmaker(bind=self._metadata_engine, autocommit=False, autoflush=False)
+                log.debug("[SQL] Created metadata engine for connection config queries")
+            
+            # Get session
+            session = self._metadata_session_factory()
+            
+            # Get current user department from context
+            from src.utils.secrets_handler import current_user_department
+            user_department = current_user_department.get()  # Default to General
+            
+            # Check if connection exists in user's department
+            check_query = text(f"SELECT 1 FROM {self.table_name} WHERE LOWER(connection_name) = LOWER(:name) AND department_name = :dept LIMIT 1")
+            exists = session.execute(check_query, {"name": connection_name, "dept": user_department}).fetchone()
+            
+            if not exists:
+                raise Exception(
+                    f"Connection '{connection_name}' does not exist in department '{user_department}'. "
+                    "Please create the connection first or check the connection name and department access."
+                )
+            
+            # Fetch connection configuration with RBAC
+            fetch_query = text(f"""
+                SELECT connection_name, connection_database_type, connection_host,
+                       connection_port, connection_username, connection_password, 
+                       connection_database_name, connection_created_by, department_name
+                FROM {self.table_name}
+                WHERE LOWER(connection_name) = LOWER(:name) AND department_name = :dept
+            """)
+            
+            result = session.execute(fetch_query, {"name": connection_name, "dept": user_department})
+            row = result.fetchone()
+            
+            if not row:
+                raise Exception(f"Connection '{connection_name}' not found")
+            
+            # Convert Row to dict
+            if hasattr(row, '_mapping'):
+                row_dict = dict(row._mapping)
+            else:
+                row_dict = {
+                    "connection_name": row[0],
+                    "connection_database_type": row[1],
+                    "connection_host": row[2],
+                    "connection_port": row[3],
+                    "connection_username": row[4],
+                    "connection_password": row[5],
+                    "connection_database_name": row[6],
+                    "connection_created_by": row[7] if len(row) > 7 else None,
+                    "department_name": row[8] if len(row) > 8 else "General"
+                }
+            
+            config = {
+                "name": row_dict.get("connection_name"),
+                "db_type": row_dict.get("connection_database_type"),
+                "host": row_dict.get("connection_host"),
+                "port": row_dict.get("connection_port"),
+                "username": row_dict.get("connection_username"),
+                "password": self._decrypt_connection_password(row_dict.get("connection_password")),
+                "database": row_dict.get("connection_database_name"),
+                "created_by": row_dict.get("connection_created_by")
+            }
+            
+            return config
+            
+        except Exception as e:
+            log.error(f"[SQL] Error fetching connection config for '{connection_name}': {e}")
+            raise
+        finally:
+            if session:
+                session.close()
+    
+    def add_sql_database(self, db_key, db_url, pool_size=20, max_overflow=10):
+        department = current_user_department.get()
+        store_key = f"{db_key}_{department}"
+
+        # If already initialized for this department, skip
+        if store_key in self.sql_engines:
+            return  # already exists
+
+        engine = create_engine(db_url, pool_size=pool_size, max_overflow=max_overflow, echo=False, future=True)
+        Session = sessionmaker(bind=engine, autocommit=False, autoflush=False)
+
+        # Store under department-qualified key
+        self.sql_engines[store_key] = engine
+        self.sql_sessions[store_key] = Session
+
+        log.debug(f"[SQL] Initialized engine for '{db_key}' (stored as '{store_key}')")
+
+    def get_sql_session(self, db_key):
+        """
+        Get SQL session. If not exists, fetch config from DB and initialize.
+        
+        Args:
+            db_key: Name of the connection to retrieve
+            
+        Returns:
+            SQLAlchemy session instance
+            
+        Raises:
+            Exception: If connection name doesn't exist in database or initialization fails
+        """
+        # If session already exists, return it
+        
+        department = current_user_department.get()
+        db_key_dept = f"{db_key}_{department}"
+
+        
+        if db_key_dept in self.sql_sessions:
+            log.debug(f"[SQL] Returning existing session for '{db_key_dept}'")
+            return self.sql_sessions[db_key_dept]()
+        
+        try:
+            log.debug(f"[SQL] Fetching connection configuration for '{db_key}'")
+            # Fetch connection details from database synchronously
+            config = self._fetch_connection_config_sync(db_key)
+            
+            # Build database URL based on database type
+            db_type = config['db_type'].lower()
+            username = config['username']
+            password = config['password']
+            host = config['host']
+            port = config['port']
+            database = config['database']
+            
+            log.debug(f"[SQL] Building connection URL for '{db_key}' (type: {db_type})")
+            # Construct database URL based on type
+            if db_type == 'postgresql':
+                db_url = f"postgresql://{username}:{password}@{host}:{port}/{database}"
+            elif db_type == 'mysql':
+                db_url = f"mysql+pymysql://{username}:{password}@{host}:{port}/{database}"
+            elif db_type == 'sqlite':
+                # --- Hyper-scale blob restore: ensure .db file is local ---
+                try:
+                    _sp = os.getenv('STORAGE_PROVIDER', '')
+                    if _sp:
+                        from src.utils.workspace_blob_sync import WorkspaceBlobSync
+                        from src.storage import get_storage_client
+                        _client = get_storage_client(_sp)
+                        _syncer = WorkspaceBlobSync(
+                            storage_client=_client,
+                            project_root=os.path.abspath("."),
+                        )
+                        _syncer.restore_sqlite_db_sync(department, database)
+                except Exception:
+                    pass  # best-effort; if blob not configured, proceed with local
+                db_url = f"sqlite:///{UPLOAD_DIR}/{department}/{database}"
+            else:
+                log.error(f"[SQL] Unsupported database type '{db_type}' for connection '{db_key}'")
+                raise Exception(
+                    f"Unsupported database type '{db_type}' for connection '{db_key}'. "
+                    "Supported types are: postgresql, mysql, sqlite"
+                )
+            
+            # Initialize the connection
+            log.info(f"[SQL] Auto-initializing connection '{db_key}' from database config")
+            # manager.add_sql_database(config.get("name",""), await _build_connection_string_helper(config))
+            self.add_sql_database(db_key, db_url)
+            
+            # Return the session
+            log.info(f"[SQL] Successfully initialized and returning session for '{db_key}'")
+            return self.sql_sessions[db_key_dept]()
+            
+        except KeyError as e:
+            # Handle missing keys in config
+            log.error(f"[SQL] Invalid connection configuration for '{db_key}': Missing field {str(e)}")
+            raise Exception(f"Invalid connection configuration for '{db_key}': Missing field {str(e)}")
+        except Exception as e:
+            # Handle any other exceptions
+            if "does not exist in the database" in str(e):
+                raise  # Re-raise connection not found errors
+            log.error(f"[SQL] Failed to initialize SQL session for '{db_key}': {str(e)}")
+            raise Exception(f"Failed to initialize SQL session for '{db_key}': {str(e)}")
+
+    def dispose_sql_engine(self, db_key):
+        # if db_key in self.sql_engines:
+        #     self.sql_engines[db_key].dispose()
+        #     log.debug(f"[SQL] Disposed engine for '{db_key}'")
+        department = current_user_department.get()
+        db_key = f"{db_key}_{department}"
+        
+        
+        if db_key in self.sql_sessions:
+            session = self.sql_sessions[db_key]()
+            session.close()
+            del self.sql_sessions[db_key]
+
+        if db_key in self.sql_engines:
+            self.sql_engines[db_key].dispose()
+            del self.sql_engines[db_key]
+            log.debug(f"[SQL] Disposed engine for '{db_key}'")
+
+    # MongoDB management
+    def add_mongo_database(self, db_key, uri, db_name, max_pool_size=30):
+        department = current_user_department.get()
+        db_key = f"{db_key}_{department}"
+        
+        if db_key in self.mongo_clients:
+            return  # already exists
+        client = AsyncIOMotorClient(uri, maxPoolSize=max_pool_size)
+        self.mongo_clients[db_key] = client
+        self.mongo_databases[db_key] = client[db_name]
+        log.debug(f"[MongoDB] Initialized client for '{db_key}'")
+
+    # def get_mongo_database(self, db_key):
+    #     if db_key not in self.mongo_databases:
+    #         raise Exception(f"No MongoDB database found for key '{db_key}'")
+    #     return self.mongo_databases[db_key]
+    def get_mongo_database(self, db_key):
+        """
+        Get MongoDB database. If not exists, fetch config from DB and initialize.
+        
+        Args:
+            db_key: Name of the connection to retrieve
+            
+        Returns:
+            MongoDB database instance
+            
+        Raises:
+            Exception: If connection name doesn't exist in database or initialization fails
+        """
+        # If database already exists, return it
+        department = current_user_department.get()
+        db_key = f"{db_key}_{department}"
+        
+        if db_key in self.mongo_databases:
+            log.debug(f"[MongoDB] Returning existing database for '{db_key}'")
+            return self.mongo_databases[db_key]
+        
+        try:
+            log.debug(f"[MongoDB] Fetching connection configuration for '{db_key}'")
+            # Fetch connection details from database synchronously
+            config = self._fetch_connection_config_sync(db_key)
+            
+            # Build MongoDB URI based on configuration
+            db_type = config['db_type'].lower()
+            
+            if db_type != 'mongodb':
+                log.error(f"[MongoDB] Invalid database type '{db_type}' for connection '{db_key}'")
+                raise Exception(
+                    f"Connection '{db_key}' is not a MongoDB connection (type: {db_type}). "
+                    "Use get_sql_session() for SQL databases."
+                )
+            
+            username = config['username']
+            password = config['password']
+            host = config['host']
+            port = config['port']
+            database_name = config['database']
+            
+            log.debug(f"[MongoDB] Building connection URI for '{db_key}'")
+            
+            # Construct MongoDB URI
+            # Format: mongodb://username:<PWD>@host:port/
+            if username and password:
+                mongo_uri = f"mongodb://{username}:{password}@{host}:{port}/"
+            else:
+                mongo_uri = f"mongodb://{host}:{port}/"
+            
+            # Initialize the MongoDB connection
+            log.info(f"[MongoDB] Auto-initializing connection '{db_key}' from database config")
+            self.add_mongo_database(db_key, mongo_uri, database_name)
+            
+            # Return the database
+            log.info(f"[MongoDB] Successfully initialized and returning database for '{db_key}'")
+            return self.mongo_databases[db_key]
+            
+        except KeyError as e:
+            # Handle missing keys in config
+            log.error(f"[MongoDB] Invalid connection configuration for '{db_key}': Missing field {str(e)}")
+            raise Exception(f"Invalid connection configuration for '{db_key}': Missing field {str(e)}")
+        except Exception as e:
+            # Handle any other exceptions
+            if "does not exist in the database" in str(e):
+                raise  # Re-raise connection not found errors
+            log.error(f"[MongoDB] Failed to initialize MongoDB database for '{db_key}': {str(e)}")
+            raise Exception(f"Failed to initialize MongoDB database for '{db_key}': {str(e)}")
+
+    async def close_mongo_client(self, db_key):
+        department = current_user_department.get()
+        db_key = f"{db_key}_{department}"
+        
+        if db_key in self.mongo_clients:
+            # Close the client
+            self.mongo_clients[db_key].close()
+            # Remove from dictionaries
+            del self.mongo_clients[db_key]
+            del self.mongo_databases[db_key]
+            log.debug(f"[MongoDB] Closed and removed client for '{db_key}'")
+
+    async def close_all(self):
+        # Close all SQL sessions and engines
+        for key in list(self.sql_sessions.keys()):
+            if key in self.sql_sessions:
+                session = self.sql_sessions[key]()
+                session.close()
+                del self.sql_sessions[key]
+        
+        for key in list(self.sql_engines.keys()):
+            if key in self.sql_engines:
+                self.sql_engines[key].dispose()
+                del self.sql_engines[key]
+                log.debug(f"[SQL] Disposed engine for '{key}'")
+    
+        # Close all MongoDB clients and databases
+        for key in list(self.mongo_clients.keys()):
+            if key in self.mongo_clients:
+                self.mongo_clients[key].close()
+                del self.mongo_clients[key]
+                log.debug(f"[MongoDB] Closed client for '{key}'")
+        
+        for key in list(self.mongo_databases.keys()):
+            if key in self.mongo_databases:
+                del self.mongo_databases[key]
+
+    # ✅ Singleton instance
+
+_connection_manager = MultiDBConnectionManager()
+ 
+def get_connection_manager():
+    return _connection_manager
+
+
+class MultiDBConnectionRepository:
+    def __init__(self, pool: asyncpg.Pool, table_name: str = "db_connections_table"):
+        # super().__init__()
+        self.pool = pool
+        self.table_name = table_name
+
+    async def create_db_connections_table_if_not_exists(self):
+        """
+        Creates the db_connections_table in PostgreSQL if it does not exist.
+        """
+        try:
+            # SQL to create the table with appropriate data types
+            create_statement = f"""
+            CREATE TABLE IF NOT EXISTS {self.table_name} (
+                connection_id TEXT PRIMARY KEY,                      -- Unique identifier for each connection
+                connection_name TEXT,                               -- Name for the connection (unique per department)
+                connection_database_type VARCHAR(50),               -- Type of the database (e.g., PostgreSQL, MySQL)
+                connection_host VARCHAR(255),                       -- Host address of the database
+                connection_port INTEGER,                            -- Port number of the database
+                connection_username VARCHAR(100),                   -- Username for the database
+                connection_password TEXT,                           -- Password (store securely or encrypted in real systems)
+                connection_database_name VARCHAR(255),              -- Name of the database    
+                connection_created_by VARCHAR(255),                 -- email of the user
+                department_name VARCHAR(255) DEFAULT 'General',     -- Department name for RBAC
+                UNIQUE(connection_name, department_name)            -- Unique constraint per department
+            )
+            """
+
+            # Execute the SQL statement
+            # async with self.pool.acquire() as connection:
+            #     await connection.execute(create_statement)
+
+            # log.debug(f"Table '{self.table_name}' created successfully or already exists.")
+
+            async with self.pool.acquire() as conn:
+                await conn.execute(create_statement)
+                alter_statements = [
+                    f"ALTER TABLE {self.table_name} ADD COLUMN IF NOT EXISTS connection_created_by TEXT",
+                    f"ALTER TABLE {self.table_name} ADD COLUMN IF NOT EXISTS blocked_sql_commands TEXT",  # JSON array of blocked SQL keywords
+                    f"ALTER TABLE {self.table_name} ADD COLUMN IF NOT EXISTS connection_description TEXT",  # Description of the connection
+                    f"ALTER TABLE {self.table_name} ADD COLUMN IF NOT EXISTS department_name VARCHAR(255) DEFAULT 'General'",
+                    f"ALTER TABLE {self.table_name} DROP CONSTRAINT IF EXISTS {self.table_name}_connection_name_key",
+                    f"ALTER TABLE {self.table_name} ADD CONSTRAINT unique_connection_department UNIQUE (connection_name, department_name)"
+                ]
+
+                for stmt in alter_statements:
+                    try:
+                        await conn.execute(stmt)
+                    except Exception as alter_error:
+                        log.debug(f"Alter statement warning (likely already exists): {alter_error}")
+            log.info(f"Table '{self.table_name}' created successfully or already exists.")
+
+        except Exception as e:
+            log.debug(f"Error creating table '{self.table_name}': {e}")
+
+    async def insert_into_db_connections_table(self, connection_data: dict):
+        """
+        Inserts data into the db_connections_table in PostgreSQL asynchronously.
+
+        Args:
+            connection_data (dict): A dictionary containing the connection details to insert.
+
+        Returns:
+            dict: Status of the operation, including success message or error details.
+        """
+        # Generate connection_id if not provided
+        if not connection_data.get("connection_id"):
+            connection_data["connection_id"] = str(uuid.uuid4())
+
+        try:
+            # Build SQL INSERT statement
+            insert_statement = f"""
+            INSERT INTO {self.table_name} (
+                connection_id,
+                connection_name,
+                connection_database_type,
+                connection_host,
+                connection_port,
+                connection_username,
+                connection_password,
+                connection_database_name,
+                connection_created_by,
+                blocked_sql_commands,
+                connection_description,
+                department_name
+            ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
+            """
+
+            # Extract values from connection_data for insertion
+            # Handle blocked_sql_commands as JSON string
+            blocked_cmds = connection_data.get("blocked_sql_commands")
+            if blocked_cmds and isinstance(blocked_cmds, list):
+                import json
+                blocked_cmds = json.dumps(blocked_cmds)
+            elif not blocked_cmds:
+                blocked_cmds = None
+                
+            values = (
+                connection_data.get("connection_id"),
+                connection_data.get("connection_name"),
+                connection_data.get("connection_database_type"),
+                connection_data.get("connection_host"),
+                int(connection_data.get("connection_port", 0)),
+                connection_data.get("connection_username"),
+                connection_data.get("connection_password"),
+                connection_data.get("connection_database_name"),
+                connection_data.get("connection_created_by"),
+                blocked_cmds,
+                connection_data.get("connection_description"),
+                connection_data.get("department_name", "General")
+            )
+
+            # Execute the insert statement
+            async with self.pool.acquire() as connection:
+                await connection.execute(insert_statement, *values)
+
+            return {
+                "message": f"Successfully inserted connection with connection name: {connection_data.get('connection_name', '')}",
+                
+                "connection_name": connection_data.get("connection_name", ""),
+                "database_type": connection_data.get("database_type", ""),
+                "is_created": True
+            }
+
+        except asyncpg.UniqueViolationError as e:
+            return {
+                "message": f"Integrity error inserting data into '{self.table_name}': {e}",
+                "connection_name": connection_data.get("connection_name", ""),
+                "database_type": connection_data.get("database_type", ""),
+                "is_created": False
+            }
+
+        except Exception as e:
+            return {
+                "message": f"Error inserting data into '{self.table_name}': {e}",
+                "connection_name": connection_data.get("connection_name", ""),
+                "database_type": connection_data.get("database_type", ""),
+                "is_created": False
+            }
+
+    async def check_connection_name_exists(self, name: str, department_name: str = None) -> bool:
+        try:
+            query = f"SELECT 1 FROM {self.table_name} WHERE LOWER(connection_name) = LOWER($1) AND department_name = $2 LIMIT 1"
+            async with self.pool.acquire() as connection:
+                result = await connection.fetchrow(query, name, department_name)
+            return result is not None
+        except Exception as e:
+            # Log or handle error if necessary
+            raise HTTPException(status_code=500, detail=f"Error checking connection name: {e}")
+
+    async def delete_connection_by_name(self, name: str, department_name: str = "General"):
+        try:
+            delete_query = f"DELETE FROM {self.table_name} WHERE LOWER(connection_name) = LOWER($1) AND department_name = $2"
+            async with self.pool.acquire() as connection:
+                result = await connection.execute(delete_query, name, department_name)
+
+            return {"message": f"Deleted: {name} from department: {department_name}", "result": result}
+
+        except Exception as e:
+            return {"error": str(e)}
+
+    async def get_connection_config(self, connection_name: str, department_name: str = "General"):
+        try:
+            query = f"""
+                SELECT connection_name, connection_database_type, connection_host,
+                    connection_port, connection_username, connection_password,connection_database_name,connection_created_by,department_name
+                FROM {self.table_name}
+                WHERE LOWER(connection_name) = LOWER($1) AND department_name = $2
+            """
+            async with self.pool.acquire() as conn:
+                row = await conn.fetchrow(query, connection_name, department_name)
+
+            if not row:
+                raise HTTPException(status_code=404, detail="Connection not found")
+
+            config = {
+                "name": row["connection_name"],
+                "db_type": row["connection_database_type"],
+                "host": row["connection_host"],
+                "port": row["connection_port"],
+                "username": row["connection_username"],
+                "password": row["connection_password"],
+                "database": row["connection_database_name"],
+                "created_by": row["connection_created_by"],
+                "department_name": row["department_name"]  # Required for SQLite path resolution
+            }
+
+            return config
+
+        except Exception as e:
+            raise HTTPException(status_code=500, detail=str(e))
+
+    async def get_connections_sql(self, department_name: str = "General"):
+        try:
+            async with self.pool.acquire() as conn:
+                rows = await conn.fetch(f"SELECT connection_name,connection_database_type,department_name FROM {self.table_name} WHERE (connection_database_type='mysql' OR connection_database_type='postgresql' OR connection_database_type='sqlite') AND department_name = $1", department_name)
+            connections = [
+                {
+                    "connection_name": row["connection_name"],
+                    "connection_database_type": row["connection_database_type"],
+                    "department_name": row["department_name"]
+                }
+                for row in rows
+            ]
+            return {"connections": connections}
+        except Exception as e:
+            raise HTTPException(status_code=500, detail=str(e))
+
+    async def get_connections_mongodb(self, department_name: str = "General"):
+        try:
+            async with self.pool.acquire() as conn:
+                # Fetch all MongoDB connections for the department
+                rows = await conn.fetch(f"SELECT connection_name , connection_database_type, department_name FROM {self.table_name} where connection_database_type='mongodb' AND department_name = $1", department_name)
+            connections = [
+                {
+                    "connection_name": row["connection_name"],
+                    "connection_database_type": row["connection_database_type"],
+                    "department_name": row["department_name"]
+                }
+                for row in rows
+            ]
+            return {"connections": connections}
+        except Exception as e:
+            raise HTTPException(status_code=500, detail=str(e))
+
+    async def get_connections(self, department_name: str = "General"):
+        try:
+            async with self.pool.acquire() as conn:
+                rows = await conn.fetch(f"SELECT connection_name, connection_database_type, department_name FROM {self.table_name} WHERE department_name = $1", department_name)
+            connections = [
+                {
+                    "connection_name": row["connection_name"],
+                    "connection_database_type": row["connection_database_type"],
+                    "department_name": row["department_name"]
+                }
+                for row in rows
+            ]
+            return {"connections": connections}
+        except Exception as e:
+            raise HTTPException(status_code=500, detail=str(e))
+
+    async def get_user_email(self, connection_name: str, department_name: str = "General"):
+        try:
+            query = f"""
+                SELECT connection_created_by
+                FROM {self.table_name}
+                WHERE connection_name = $1 AND department_name = $2
+            """
+            async with self.pool.acquire() as conn:
+                row = await conn.fetchrow(query, connection_name, department_name)
+
+            if not row:
+                raise HTTPException(status_code=404, detail="Connection not found")
+
+            config = {
+                "created_by": row["connection_created_by"]
+            }
+
+            return config
+
+        except Exception as e:
+            raise HTTPException(status_code=500, detail=str(e))
+
+    async def get_blocked_sql_commands(self, connection_name: str) -> list:
+        """
+        Get the blocked SQL commands for a specific connection.
+        
+        Args:
+            connection_name: Name of the database connection
+            
+        Returns:
+            List of blocked SQL keywords/commands for this connection,
+            or None if no custom blocked commands are configured
+        """
+        import json
+        try:
+            query = f"""
+                SELECT blocked_sql_commands
+                FROM {self.table_name}
+                WHERE connection_name = $1
+            """
+            async with self.pool.acquire() as conn:
+                row = await conn.fetchrow(query, connection_name)
+
+            if not row or not row["blocked_sql_commands"]:
+                return None  # No custom blocked commands, use defaults
+            
+            blocked_cmds = row["blocked_sql_commands"]
+            if isinstance(blocked_cmds, str):
+                return json.loads(blocked_cmds)
+            return blocked_cmds
+
+        except Exception as e:
+            log.warning(f"Error fetching blocked commands for {connection_name}: {e}")
+            return None
+
+    async def update_blocked_sql_commands(self, connection_name: str, blocked_commands: list) -> dict:
+        """
+        Update the blocked SQL commands for a specific connection.
+        
+        Args:
+            connection_name: Name of the database connection
+            blocked_commands: List of SQL keywords to block (e.g., ["DELETE", "DROP", "TRUNCATE"])
+            
+        Returns:
+            Dict with status of the operation
+        """
+        import json
+        try:
+            blocked_json = json.dumps(blocked_commands) if blocked_commands else None
+            
+            query = f"""
+                UPDATE {self.table_name}
+                SET blocked_sql_commands = $1
+                WHERE connection_name = $2
+            """
+            async with self.pool.acquire() as conn:
+                result = await conn.execute(query, blocked_json, connection_name)
+                
+            if "UPDATE 0" in result:
+                return {"success": False, "error": f"Connection '{connection_name}' not found"}
+                
+            return {"success": True, "message": f"Blocked commands updated for {connection_name}"}
+
+        except Exception as e:
+            return {"success": False, "error": str(e)}
+
+    def _get_user_department(self) -> str:
+        """Get current user's department from context, default to 'General'"""
+        try:
+            from src.utils.secrets_handler import current_user_department
+            return current_user_department.get()
+        except Exception:
+            return "General"
+    
+    def _get_user_email(self) -> str:
+        """Get current user's email from context"""
+        try:
+            from src.utils.secrets_handler import current_user_email
+            return current_user_email.get()
+        except Exception:
+            return None
+
+    async def check_user_connection_access(self, connection_name: str, user_email: str, department_name: str = None) -> bool:
+        """
+        Check if a user has access to a specific database connection.
+        
+        Args:
+            connection_name: Name of the connection
+            user_email: User's email address
+            department_name: Department name (defaults to user's current department)
+            
+        Returns:
+            bool: True if user has access, False otherwise
+        """
+        if not department_name:
+            department_name = self._get_user_department()
+            
+        try:
+            query = f"""
+                SELECT 1 FROM {self.table_name} 
+                WHERE connection_name = $1 AND department_name = $2
+                LIMIT 1
+            """
+            async with self.pool.acquire() as conn:
+                result = await conn.fetchrow(query, connection_name, department_name)
+            return result is not None
+        except Exception as e:
+            log.error(f"Error checking user connection access: {e}")
+            return False
+
+    async def get_user_connections(self, user_email: str = None, department_name: str = None):
+        """
+        Get all connections accessible to a user in their department.
+        
+        Args:
+            user_email: User's email (defaults to current user)
+            department_name: Department name (defaults to user's current department)
+            
+        Returns:
+            dict: List of accessible connections
+        """
+        if not user_email:
+            user_email = self._get_user_email()
+        if not department_name:
+            department_name = self._get_user_department()
+            
+        try:
+            query = f"""
+                SELECT connection_name, connection_database_type, department_name, connection_created_by
+                FROM {self.table_name} 
+                WHERE department_name = $1
+                ORDER BY connection_name
+            """
+            async with self.pool.acquire() as conn:
+                rows = await conn.fetch(query, department_name)
+                
+            connections = [
+                {
+                    "connection_name": row["connection_name"],
+                    "connection_database_type": row["connection_database_type"], 
+                    "department_name": row["department_name"],
+                    "created_by": row["connection_created_by"],
+                    "is_owner": row["connection_created_by"] == user_email
+                }
+                for row in rows
+            ]
+            return {"connections": connections, "department": department_name}
+        except Exception as e:
+            raise HTTPException(status_code=500, detail=str(e))
+ 

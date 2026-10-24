@@ -1,0 +1,490 @@
+import os
+import json
+from pathlib import Path
+from datetime import datetime
+from typing import Dict, Any, Optional
+import asyncpg
+from io import BytesIO
+from src.utils.file_manager import FileManager
+from src.config.constants import TableNames
+from telemetry_wrapper import logger as log
+from dotenv import load_dotenv
+
+load_dotenv()
+
+STORAGE_PROVIDER=os.getenv("STORAGE_PROVIDER","")
+ENABLE_TOOL_FILE_CREATION = os.getenv("ENABLE_TOOL_FILE_CREATION", "true").strip().lower() == "true"
+
+
+class ToolFileManager:
+    """
+    Manages tool .py files - creates, updates, deletes, and restores files.
+    """
+
+    def __init__(self, base_directory: Optional[str] = None, pool: Optional[asyncpg.Pool] = None):
+        """Initialize ToolFileManager with storage directory and database pool."""
+        if base_directory is None:
+            project_root = Path(__file__).parent.parent.parent
+            self.base_directory = project_root / "onboarded_tools"
+        else:
+            self.base_directory = Path(base_directory)
+        if ENABLE_TOOL_FILE_CREATION:
+            self.base_directory.mkdir(parents=True, exist_ok=True)
+        self.pool = pool
+        self.file_manager = FileManager()
+        log.info(f"ToolFileManager initialized with base directory: {self.base_directory}")
+    
+    def _sanitize_filename(self, tool_name: str, version: Optional[str] = None) -> str:
+        """Convert tool_name to valid filename with .py extension.
+        
+        Args:
+            tool_name: The name of the tool
+            version: Optional version string (e.g., 'v1', 'v2'). If provided, creates versioned filename.
+        
+        Returns:
+            Filename like 'addition_v1.py' or 'addition.py' if no version
+        """
+        sanitized = "".join(c if c.isalnum() or c in ('_', '-') else '_' for c in tool_name)
+        if version:
+            return f"{sanitized}_{version}.py"
+        return f"{sanitized}.py"
+    
+    def _format_datetime(self, dt: Optional[datetime]) -> str:
+        """Format datetime for Python file (returns 'None' or ISO string)."""
+        if dt is None:
+            return "None"
+        if isinstance(dt, str):
+            return f"'{dt}'"
+        return f"'{dt.isoformat()}'"
+    
+    def _escape_string(self, s: Optional[str]) -> str:
+        """Escape special characters for Python code (returns 'None' or triple-quoted string)."""
+        if s is None:
+            return "None"
+        if '\n' in s or "'''" in s or '"""' in s:
+            return repr(s)
+        return f'"""{s}"""'
+    
+    async def create_tool_file(self, tool_data: Dict[str, Any], version: Optional[str] = "v1") -> Dict[str, Any]:
+        """
+        Create a .py file for the tool with code.
+        
+        Args:
+            tool_data: Dictionary containing tool information including tool_name and code_snippet
+            version: Version string (e.g., 'v1', 'v2'). Creates versioned filename like 'addition_v1.py'
+        """
+        if not ENABLE_TOOL_FILE_CREATION:
+            log.info("Tool file creation is disabled (ENABLE_TOOL_FILE_CREATION=false). Skipping file creation.")
+            return {
+                "success": True,
+                "file_path": "",
+                "message": "Tool file creation is disabled via ENABLE_TOOL_FILE_CREATION flag"
+            }
+        try:
+            tool_name = tool_data.get('tool_name')
+            if not tool_name:
+                return {
+                    "success": False,
+                    "file_path": "",
+                    "message": "tool_name is required to create tool file"
+                }
+            filename = self._sanitize_filename(tool_name, version)
+            file_path = self.base_directory / filename
+            file_content = self._generate_file_content(tool_data)
+
+            if STORAGE_PROVIDER!="":
+                file_bytes=BytesIO(file_content.encode('utf-8'))
+
+                class MockUploadFile:
+                    def __init__(self,file_obj:BytesIO,filename:str):
+                        self.file=file_obj
+                        self.filename=filename
+                mock_file=MockUploadFile(file_bytes,filename)        
+                status=await self.file_manager.upload_file_to_storage(mock_file,storage_provider=STORAGE_PROVIDER)
+                if status['message']=="File uploaded successfully!":
+                    log.info(f"Successfully uploaded tool file to {STORAGE_PROVIDER}: {filename}")
+                    location=status['location']
+                    status={
+                        "success": True,
+                        "file_path": status['location'],
+                        "message": f"Tool file created successfully at {location}"
+                    }
+
+            with open(file_path, 'w', encoding='utf-8') as f:
+                f.write(file_content)
+            log.info(f"Successfully created tool file: {file_path}")
+
+            # --- Hyper-scale blob sync: push tool file to blob ---
+            try:
+                if STORAGE_PROVIDER:
+                    from src.utils.workspace_blob_sync import WorkspaceBlobSync
+                    from src.storage import get_storage_client
+                    _client = get_storage_client(STORAGE_PROVIDER)
+                    _syncer = WorkspaceBlobSync(
+                        storage_client=_client,
+                        project_root=os.path.abspath("."),
+                    )
+                    _syncer.schedule_tool_file_sync(filename)
+            except Exception:
+                pass
+
+            return {
+                "success": True,
+                "file_path": str(file_path),
+                "message": f"Tool file created successfully at {file_path}"
+            }
+        except Exception as e:
+            log.error(f"Error creating tool file for tool_name {tool_data.get('tool_name')}: {e}")
+            return {
+                "success": False,
+                "file_path": "",
+                "message": f"Failed to create tool file: {str(e)}"
+            }
+    
+    def _generate_file_content(self, tool_data: Dict[str, Any]) -> str:
+        """
+        Generate Python file content with code_snippet.
+        """
+        code_snippet = tool_data.get('code_snippet', '')
+        content = f'''{code_snippet}'''
+        return content
+    
+    async def update_tool_file(self, tool_data: Dict[str, Any], version: Optional[str] = "v1") -> Dict[str, Any]:
+        """
+        Update existing tool file by overwriting with new data.
+        If file doesn't exist (old tools), create it during update.
+        
+        Args:
+            tool_data: Dictionary containing tool information
+            version: Version string (e.g., 'v1', 'v2'). Creates/updates versioned file.
+        """
+        if not ENABLE_TOOL_FILE_CREATION:
+            log.info("Tool file operations are disabled (ENABLE_TOOL_FILE_CREATION=false). Skipping update.")
+            return {
+                "success": True,
+                "file_path": "",
+                "message": "Tool file operations are disabled via ENABLE_TOOL_FILE_CREATION flag"
+            }
+        tool_name = tool_data.get('tool_name')
+        if not tool_name:
+            return {
+                "success": False,
+                "file_path": "",
+                "message": "tool_name is required to update tool file"
+            }
+        
+        filename = self._sanitize_filename(tool_name, version)
+
+        file_exists = await self.tool_file_exists(tool_name, version)
+
+        if not file_exists and STORAGE_PROVIDER!='':
+            file_exists= await self.file_manager.cloud_file_search(filename,storage_provider=STORAGE_PROVIDER)
+        
+        result = await self.create_tool_file(tool_data, version)
+        
+        if result.get("success"):
+            if not file_exists:
+                log.info(f"Created file for tool '{tool_name}' version '{version}' during update")
+                if STORAGE_PROVIDER!='':
+                    result["message"] = f"Tool file created in {STORAGE_PROVIDER} for tool during update at {result.get('upload_identifier')}"
+                else:
+                    result["message"] = f"Tool file created for tool during update at {result.get('file_path')}"
+            else:
+                log.info(f"Updated existing file for tool '{tool_name}' version '{version}'")
+                if STORAGE_PROVIDER!="":
+                    result["message"] = f"Tool file updated successfully in {STORAGE_PROVIDER} at {result.get('upload_identifier')}"
+                else:
+                    result["message"] = f"Tool file updated successfully at {result.get('file_path')}"
+
+        return result
+    
+    async def delete_tool_file(self, tool_name: str, version: Optional[str] = None) -> Dict[str, Any]:
+        """
+        Delete tool file by tool_name and optional version.
+        
+        Args:
+            tool_name: Name of the tool
+            version: If provided, deletes specific version file (e.g., 'addition_v1.py').
+                     If None, deletes the base file (e.g., 'addition.py') for backwards compatibility.
+        """
+        if not ENABLE_TOOL_FILE_CREATION:
+            log.info("Tool file operations are disabled (ENABLE_TOOL_FILE_CREATION=false). Skipping delete.")
+            return {
+                "success": True,
+                "file_path": "",
+                "message": "Tool file operations are disabled via ENABLE_TOOL_FILE_CREATION flag"
+            }
+        try:
+            filename = self._sanitize_filename(tool_name, version)
+            file_path = self.base_directory / filename
+            if file_path.exists():
+                if STORAGE_PROVIDER!="":
+                    try:
+                        result=await self.file_manager.delete_file_from_storage(filename,storage_provider=STORAGE_PROVIDER)
+                        if result['info']==f"File '{filename}' deleted successfully from {STORAGE_PROVIDER} storage.":
+                            log.info(f"Successfully deleted tool file from {STORAGE_PROVIDER}: {result}")
+                        else:
+                            log.info(f"Failed to delete tool file from {STORAGE_PROVIDER}: {result}")
+                    except Exception as e:
+                        log.error(f"Error deleting tool file from {STORAGE_PROVIDER}: {e}")
+                file_path.unlink()
+                log.info(f"Successfully deleted tool file: {file_path}")
+                return {
+                    "success": True,
+                    "file_path": str(file_path),
+                    "message": f"Tool file deleted successfully"
+                }
+            else:
+                if STORAGE_PROVIDER!="":
+                    res=await self.file_manager.cloud_file_search(filename,storage_provider=STORAGE_PROVIDER)
+                    if res:
+                        try:
+                            result=await self.file_manager.delete_file_from_storage(filename,storage_provider=STORAGE_PROVIDER)
+                            if result['info']==f"File '{filename}' deleted successfully from {STORAGE_PROVIDER} storage.":
+                                log.info(f"Successfully deleted tool file from {STORAGE_PROVIDER}: {result}")
+                                return {
+                                    "success": True,
+                                    "message": f"Tool file deleted successfully from {STORAGE_PROVIDER}"
+                                }
+                            else:
+                                log.info(f"Failed to delete tool file from {STORAGE_PROVIDER}: {result}")
+                                return {
+                                    "success": False,
+                                    "message": f"Failed to delete tool file from {STORAGE_PROVIDER}"
+                                }
+                        except Exception as e:
+                            log.error(f"Error deleting tool file from {STORAGE_PROVIDER}: {e}")
+                    else:
+                        log.warning(f"Tool file not found: {file_path}")
+                        return {
+                        "success": False,
+                        "file_path": str(file_path),
+                        "message": f"Tool file not found"
+                        }
+                else:
+                    log.warning(f"Tool file not found: {file_path}")
+                    return {
+                    "success": False,
+                    "file_path": str(file_path),
+                    "message": f"Tool file not found"
+                }
+        except Exception as e:
+            log.error(f"Error deleting tool file for tool_name {tool_name}: {e}")
+            return {
+                "success": False,
+                "file_path": "",
+                "message": f"Failed to delete tool file: {str(e)}"
+            }
+    
+    async def delete_all_version_files(self, tool_name: str, versions: list) -> Dict[str, Any]:
+        """
+        Delete all version files for a tool.
+        
+        Args:
+            tool_name: Name of the tool
+            versions: List of versions to delete (e.g., ['v1', 'v2', 'v3'])
+        
+        Returns:
+            Dictionary with success status and deleted files info
+        """
+        if not ENABLE_TOOL_FILE_CREATION:
+            log.info("Tool file operations are disabled (ENABLE_TOOL_FILE_CREATION=false). Skipping delete all versions.")
+            return {
+                "success": True,
+                "deleted_files": [],
+                "failed_files": [],
+                "message": "Tool file operations are disabled via ENABLE_TOOL_FILE_CREATION flag"
+            }
+        deleted_files = []
+        failed_files = []
+        
+        for version in versions:
+            result = await self.delete_tool_file(tool_name, version)
+            if result.get("success"):
+                deleted_files.append(f"{tool_name}_{version}.py")
+            else:
+                failed_files.append(f"{tool_name}_{version}.py")
+        
+        # Also try to delete the base file (without version) for backwards compatibility
+        base_result = await self.delete_tool_file(tool_name, None)
+        if base_result.get("success"):
+            deleted_files.append(f"{tool_name}.py")
+        
+        return {
+            "success": len(failed_files) == 0,
+            "deleted_files": deleted_files,
+            "failed_files": failed_files,
+            "message": f"Deleted {len(deleted_files)} files, {len(failed_files)} failed"
+        }
+    
+    async def restore_tool_file(self, tool_data: Dict[str, Any]) -> Dict[str, Any]:
+        """
+        Restore tool file when tool is restored from recycle bin.
+        Fetches data from database and recreates the .py file.
+        """
+        if not ENABLE_TOOL_FILE_CREATION:
+            log.info("Tool file operations are disabled (ENABLE_TOOL_FILE_CREATION=false). Skipping restore.")
+            return {
+                "success": True,
+                "file_path": "",
+                "message": "Tool file operations are disabled via ENABLE_TOOL_FILE_CREATION flag"
+            }
+        try:
+            tool_name = tool_data.get('tool_name')
+            if not tool_name:
+                return {
+                    "success": False,
+                    "file_path": "",
+                    "message": "tool_name is required to restore tool file"
+                }
+            result = await self.create_tool_file(tool_data)
+            
+            if result.get("success"):
+                log.info(f"Successfully restored tool file for: {tool_name}")
+                return {
+                    "success": True,
+                    "file_path": result.get("file_path", ""),
+                    "message": f"Tool file restored successfully from database"
+                }
+            else:
+                log.error(f"Failed to restore tool file for: {tool_name}")
+                return result
+                
+        except Exception as e:
+            log.error(f"Error restoring tool file for tool_name {tool_data.get('tool_name')}: {e}")
+            return {
+                "success": False,
+                "file_path": "",
+                "message": f"Failed to restore tool file: {str(e)}"
+            }
+
+    async def restore_tool_file_for_version(
+        self,
+        tool_data: Dict[str, Any],
+        version: str,
+        code_snippet: str
+    ) -> Dict[str, Any]:
+        """
+        Restore a specific version file when tool is restored from recycle bin.
+        
+        Args:
+            tool_data: Dictionary containing tool information including tool_name
+            version: Version string (e.g., 'v1', 'v2')
+            code_snippet: The code snippet for this specific version
+            
+        Returns:
+            Dictionary with success status and file path
+        """
+        if not ENABLE_TOOL_FILE_CREATION:
+            log.info("Tool file operations are disabled (ENABLE_TOOL_FILE_CREATION=false). Skipping restore for version.")
+            return {
+                "success": True,
+                "file_path": "",
+                "message": "Tool file operations are disabled via ENABLE_TOOL_FILE_CREATION flag"
+            }
+        try:
+            tool_name = tool_data.get('tool_name')
+            if not tool_name:
+                return {
+                    "success": False,
+                    "file_path": "",
+                    "message": "tool_name is required to restore tool file"
+                }
+            
+            # Create versioned file data
+            versioned_tool_data = {
+                'tool_name': tool_name,
+                'code_snippet': code_snippet
+            }
+            
+            result = await self.create_tool_file(versioned_tool_data, version)
+            
+            if result.get("success"):
+                log.info(f"Successfully restored tool file for: {tool_name} version {version}")
+                return {
+                    "success": True,
+                    "file_path": result.get("file_path", ""),
+                    "message": f"Tool file restored successfully for version {version}"
+                }
+            else:
+                log.error(f"Failed to restore tool file for: {tool_name} version {version}")
+                return result
+                
+        except Exception as e:
+            log.error(f"Error restoring tool file for tool_name {tool_data.get('tool_name')} version {version}: {e}")
+            return {
+                "success": False,
+                "file_path": "",
+                "message": f"Failed to restore tool file: {str(e)}"
+            }
+    
+    async def get_tool_file_path(self, tool_name: str) -> Optional[str]:
+        """Get file path for tool's .py file (returns None if doesn't exist)."""
+        filename = self._sanitize_filename(tool_name)
+        file_path = self.base_directory / filename
+        
+        if file_path.exists():
+            return str(file_path)
+        return None
+    
+    async def tool_file_exists(self, tool_name: str, version: Optional[str] = None) -> bool:
+        """Check if tool file exists by tool_name and optional version."""
+        filename = self._sanitize_filename(tool_name, version)
+        file_path = self.base_directory / filename
+        return file_path.exists()
+    
+    async def sync_existing_tools_from_db(self, force: bool = False) -> Dict[str, Any]:
+        """
+        Sync all existing tools from database to .py files.
+        Call this once to create files for tools that were added before this feature.
+        
+        Args:
+            force: If True, recreate all files even if they exist
+        """
+        if not ENABLE_TOOL_FILE_CREATION:
+            log.info("Tool file operations are disabled (ENABLE_TOOL_FILE_CREATION=false). Skipping DB sync.")
+            return {
+                "success": True,
+                "message": "Tool file operations are disabled via ENABLE_TOOL_FILE_CREATION flag"
+            }
+        if not self.pool:
+            return {"success": False, "error": "Database pool not initialized"}
+        
+        try:
+            query = f"""
+                SELECT tool_name, code_snippet
+                FROM {TableNames.TOOL.value}
+            """
+            
+            async with self.pool.acquire() as conn:
+                tools = await conn.fetch(query)
+            if not tools:
+                log.info("No tools found in database")
+                return {"success": True, "total": 0, "created": 0, "skipped": 0}
+            log.info(f"Found {len(tools)} active tools in database")
+            files_created = 0
+            files_skipped = 0
+            for tool in tools:
+                tool_data = {
+                    "tool_name": tool['tool_name'],
+                    "code_snippet": tool['code_snippet']
+                }
+                
+                tool_name = tool_data["tool_name"]
+                if not force and await self.tool_file_exists(tool_name):
+                    files_skipped += 1
+                    continue
+                result = await self.create_tool_file(tool_data)
+                if result.get("success"):
+                    files_created += 1
+                    log.info(f"Created file for '{tool_name}'")
+            log.info(f"Sync complete: {files_created} created, {files_skipped} skipped")
+            return {
+                "success": True,
+                "total": len(tools),
+                "created": files_created,
+                "skipped": files_skipped
+            }  
+        except Exception as e:
+            log.error(f"Error syncing tools from database: {e}")
+            return {"success": False, "error": str(e)}

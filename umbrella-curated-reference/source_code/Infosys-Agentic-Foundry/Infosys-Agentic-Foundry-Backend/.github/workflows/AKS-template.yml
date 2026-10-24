@@ -1,0 +1,380 @@
+# ============================================================
+#  TEMPLATE: Build and Deploy to AKS (Azure Kubernetes Service)
+#
+#  HOW TO USE THIS TEMPLATE:
+#  1. Search for every occurrence of <PLACEHOLDER> below and
+#     replace it with your actual value.
+#  2. Add the required GitHub Secrets listed in the SECRETS
+#     section to your repository before running this pipeline.
+#  3. Ensure your self-hosted runner has the correct label and
+#     all required tools installed (az CLI, docker, kubectl,
+#     kubelogin).
+#  4. Rename this file to deploy-aks.yml and place it in
+#     .github/workflows/ in your repository.
+# ============================================================
+
+name: Build and Deploy to AKS
+
+# ── Triggers ─────────────────────────────────────────────────
+# Auto-trigger on push to your branch, or run manually.
+on:
+  push:
+    branches:
+      - '<YOUR_BRANCH_NAME>'        # ← Change to your deployment branch (e.g. main, develop)
+  workflow_dispatch:
+
+# ── Pipeline-level environment variables ─────────────────────
+# Non-sensitive values are read from GitHub Variables (vars.*)
+# Sensitive values are read from GitHub Secrets (secrets.*)
+# Nothing is hardcoded here — safe to commit to public GitHub.
+env:
+  # ── Non-sensitive config → stored as GitHub Variables ────────
+  # GitHub Repo → Settings → Secrets and variables → Variables → New repository variable
+  AZURE_CONTAINER_REGISTRY: ${{ vars.AZURE_CONTAINER_REGISTRY }}  # e.g. myregistry.azurecr.io
+  RESOURCE_GROUP:           ${{ vars.RESOURCE_GROUP }}            # Azure resource group containing the AKS cluster
+  CLUSTER_NAME:             ${{ vars.CLUSTER_NAME }}              # AKS cluster name
+  NAMESPACE:                ${{ vars.NAMESPACE }}                 # K8s namespace for the app
+  DEPLOY_NAME:              ${{ vars.DEPLOY_NAME }}               # K8s Deployment name
+  CONTAINER_NAME:           ${{ vars.CONTAINER_NAME }}            # Container name inside the pod
+  SHORT_NAME:               ${{ vars.SHORT_NAME }}                # Short name used for ACR/JFrog image tagging
+  JFROG_REGISTRY:           ${{ vars.JFROG_REGISTRY }}            # e.g. yourcompany.jfrog.io
+  JFROG_REPO:               ${{ vars.JFROG_REPO }}                # JFrog Docker repository name
+  JFROG_IMAGE_NAME:         ${{ vars.JFROG_IMAGE_NAME }}           # Base image name for the initial build push
+
+# ── GITHUB VARIABLES (non-sensitive) ─────────────────────────
+# GitHub Repo → Settings → Secrets and variables → Variables → New repository variable
+#
+#   Variable Name              Example Value
+#   ──────────────────────────────────────────────────────────
+#   AZURE_CONTAINER_REGISTRY   myregistry.azurecr.io
+#   RESOURCE_GROUP             RG-MY-RESOURCE-GROUP
+#   CLUSTER_NAME               aks-my-cluster
+#   NAMESPACE                  my-app-namespace
+#   DEPLOY_NAME                my-deployment
+#   CONTAINER_NAME             my-container
+#   SHORT_NAME                 my-app
+#   JFROG_REGISTRY             yourcompany.jfrog.io
+#   JFROG_REPO                 your-jfrog-repo
+#   JFROG_IMAGE_NAME           my-app
+#
+# ── GITHUB SECRETS (sensitive) ───────────────────────────────
+# GitHub Repo → Settings → Secrets and variables → Actions → New repository secret
+#
+#   Secret Name              What to Put
+#   ──────────────────────────────────────────────────────────
+#   AZURE_CLIENT_ID          Service principal (app registration) client ID
+#   AZURE_CLIENT_SECRET      Service principal client secret
+#   AZURE_TENANT_ID          Azure AD tenant ID
+#   AZURE_SUBSCRIPTION_ID    Azure subscription ID that hosts the AKS cluster
+#   JFROG_USERNAME           JFrog Artifactory username
+#   JFROG_TOKEN              JFrog Artifactory access token / API key
+#   APP_ENV_FILE             Full content of your application .env file
+# ─────────────────────────────────────────────────────────────
+
+jobs:
+
+  # ============================================================
+  # JOB — deploy
+  # Builds the Docker image, pushes it to JFrog Artifactory,
+  # mirrors it into Azure Container Registry (ACR), then deploys
+  # the application to AKS.
+  # - Creates the app namespace and image-pull secret if needed.
+  # - Builds a Kubernetes Secret from the .env file.
+  # - On first run: creates the Deployment + LoadBalancer Service.
+  # - On subsequent runs: updates the container image only.
+  # - Waits for rollout, then prints a full deployment summary.
+  # - On failure: auto-prints pod logs and events for debugging.
+  # ============================================================
+  deploy:
+    name: Build from code, Push to ACR, Deploy to AKS
+    runs-on: [self-hosted, Linux, X64, '<YOUR_RUNNER_LABEL>']  # ← Change to your runner label
+    permissions:
+      contents: read
+
+    steps:
+
+      # ── 1. Checkout ──────────────────────────────────────────
+      - name: Checkout source code
+        uses: actions/checkout@v4
+
+      # ── 2. Azure Login ────────────────────────────────────────
+      # Authenticates using a service principal stored in GitHub Secrets.
+      # Adjust the CA bundle paths below if your self-hosted runner
+      # uses a different trust store location.
+      - name: Azure login
+        shell: bash
+        env:
+          REQUESTS_CA_BUNDLE: /etc/ssl/certs/ca-bundle.crt
+          SSL_CERT_FILE: /etc/ssl/certs/ca-bundle.crt
+        run: |
+          az logout || true
+          az account clear || true
+          az login --service-principal \
+            --username "${{ secrets.AZURE_CLIENT_ID }}" \
+            --password "${{ secrets.AZURE_CLIENT_SECRET }}" \
+            --tenant "${{ secrets.AZURE_TENANT_ID }}"
+          az account set --subscription "${{ secrets.AZURE_SUBSCRIPTION_ID }}"
+
+      # ── 3. Build and Push to JFrog ────────────────────────────
+      # Builds the image once and pushes it to JFrog Artifactory,
+      # tagged with the git commit SHA for traceability.
+      - name: Build and push Docker image to JFrog Artifactory
+        env:
+          JFROG_USERNAME: ${{ secrets.JFROG_USERNAME }}
+          JFROG_TOKEN: ${{ secrets.JFROG_TOKEN }}
+          REQUESTS_CA_BUNDLE: /etc/ssl/certs/ca-bundle.crt
+          SSL_CERT_FILE: /etc/ssl/certs/ca-bundle.crt
+        run: |
+          JFROG_IMG="${{ env.JFROG_REGISTRY }}/${{ env.JFROG_REPO }}/${{ env.JFROG_IMAGE_NAME }}:${{ github.sha }}"
+
+          echo "INFO: Logging in to JFrog Docker registry: ${{ env.JFROG_REGISTRY }} ..."
+          docker login "${{ env.JFROG_REGISTRY }}" -u "$JFROG_USERNAME" -p "$JFROG_TOKEN"
+
+          echo "INFO: Building Docker image => $JFROG_IMG ..."
+          docker build -t "$JFROG_IMG" .
+
+          echo "INFO: Pushing Docker image to JFrog => $JFROG_IMG ..."
+          docker push "$JFROG_IMG"
+          echo "INFO: Image pushed to JFrog Artifactory successfully."
+
+      # ── 4. Mirror to ACR ──────────────────────────────────────
+      # Pulls the image back from JFrog, retags it for ACR, and
+      # pushes both to ACR and a JFrog "ACR mirror" repo path so
+      # both registries carry the exact image used to deploy.
+      - name: Pull from JFrog, retag, push to ACR and JFrog
+        env:
+          JFROG_USERNAME: ${{ secrets.JFROG_USERNAME }}
+          JFROG_TOKEN: ${{ secrets.JFROG_TOKEN }}
+          REQUESTS_CA_BUNDLE: /etc/ssl/certs/ca-bundle.crt
+          SSL_CERT_FILE: /etc/ssl/certs/ca-bundle.crt
+        run: |
+          JFROG_IMG="${{ env.JFROG_REGISTRY }}/${{ env.JFROG_REPO }}/${{ env.JFROG_IMAGE_NAME }}:${{ github.sha }}"
+          ACR_IMG="${{ env.AZURE_CONTAINER_REGISTRY }}/${{ env.SHORT_NAME }}:${{ github.sha }}"
+          JFROG_ACR_IMG="${{ env.JFROG_REGISTRY }}/${{ env.JFROG_REPO }}/${{ env.SHORT_NAME }}:${{ github.sha }}"
+          ACR_NAME=$(echo "${{ env.AZURE_CONTAINER_REGISTRY }}" | cut -d'.' -f1)
+
+          echo "INFO: Logging in to JFrog Docker registry ..."
+          docker login "${{ env.JFROG_REGISTRY }}" -u "$JFROG_USERNAME" -p "$JFROG_TOKEN"
+
+          echo "INFO: Pulling image from JFrog => $JFROG_IMG ..."
+          docker pull "$JFROG_IMG"
+
+          echo "INFO: Retagging image for ACR => $ACR_IMG ..."
+          docker tag "$JFROG_IMG" "$ACR_IMG"
+
+          echo "INFO: Logging in to ACR: $ACR_NAME ..."
+          az acr login --name "$ACR_NAME"
+
+          echo "INFO: Pushing image to ACR => $ACR_IMG ..."
+          docker push "$ACR_IMG"
+          echo "INFO: Image pushed to ACR successfully."
+
+          echo "INFO: Retagging image for JFrog ACR mirror => $JFROG_ACR_IMG ..."
+          docker tag "$JFROG_IMG" "$JFROG_ACR_IMG"
+
+          echo "INFO: Pushing ACR-equivalent image to JFrog => $JFROG_ACR_IMG ..."
+          docker push "$JFROG_ACR_IMG"
+          echo "INFO: ACR-equivalent image pushed to JFrog Artifactory successfully."
+
+      # ── 5. kubelogin ───────────────────────────────────────────
+      # Required for kubectl to authenticate against AKS using
+      # Azure AD credentials (non-interactive, service-principal mode).
+      - name: Set up kubelogin
+        env:
+          NODE_EXTRA_CA_CERTS: /etc/ssl/certs/ca-bundle.crt
+        uses: azure/use-kubelogin@v1
+        with:
+          kubelogin-version: 'v0.0.25'
+
+      # ── 6. AKS Context ────────────────────────────────────────
+      - name: Get K8s context
+        uses: azure/aks-set-context@v3
+        with:
+          resource-group: ${{ env.RESOURCE_GROUP }}
+          cluster-name: ${{ env.CLUSTER_NAME }}
+          admin: 'false'
+          use-kubelogin: 'true'
+
+      # ── 7. App Namespace ──────────────────────────────────────
+      - name: Ensure Namespace Exists
+        run: |
+          kubectl create namespace ${{ env.NAMESPACE }} --dry-run=client -o yaml | kubectl apply -f -
+
+      # ── 8. Image Pull Secret ──────────────────────────────────
+      # Lets AKS pull the image from JFrog Artifactory.
+      - name: Create/Update JFrog Image Pull Secret
+        env:
+          JFROG_USERNAME: ${{ secrets.JFROG_USERNAME }}
+          JFROG_TOKEN: ${{ secrets.JFROG_TOKEN }}
+        run: |
+          kubectl create secret docker-registry jfrog-secret \
+            --docker-server="${{ env.JFROG_REGISTRY }}" \
+            --docker-username="$JFROG_USERNAME" \
+            --docker-password="$JFROG_TOKEN" \
+            -n ${{ env.NAMESPACE }} \
+            --dry-run=client -o yaml | kubectl apply -f -
+          echo "INFO: jfrog-secret created/updated in namespace ${{ env.NAMESPACE }}"
+
+      # ── 9. Kubernetes Secret ──────────────────────────────────
+      # Reads the APP_ENV_FILE secret, cleans it (strips BOM/zero-width
+      # chars, removes duplicates, strips quotes/whitespace/comments)
+      # and builds the 'app-env' Kubernetes secret.
+      - name: Create/Update Kubernetes Secret
+        env:
+          ENV_FILE_CONTENT: ${{ secrets.APP_ENV_FILE }}
+        run: |
+          echo "=== Processing environment file ==="
+          if [ -z "$ENV_FILE_CONTENT" ]; then
+            echo "ERROR: APP_ENV_FILE secret is empty."
+            exit 1
+          fi
+          printf "%s" "$ENV_FILE_CONTENT" > .env.temp
+          sed -i 's/\xef\xbb\xbf//g; s/\xe2\x80\x8b//g' .env.temp
+          awk -F= '!seen[$1]++' .env.temp > .env.cleaned
+          sed 's/^[[:space:]]*//; s/[[:space:]]*=[[:space:]]*/=/; s/="\(.*\)"$/=\1/; s/='\''\(.*\)'\''$/=\1/; /^$/d; /^#/d' .env.cleaned > .env.k8s
+          echo "=== Final secret keys (after deduplication) ==="
+          cut -d= -f1 .env.k8s
+          kubectl create secret generic app-env \
+            --from-env-file=.env.k8s \
+            -n ${{ env.NAMESPACE }} --dry-run=client -o yaml | kubectl apply -f -
+          rm -f .env.temp .env.cleaned .env.k8s
+
+      # ── 10. Deploy ─────────────────────────────────────────────
+      # First run  → creates the Deployment and internal LoadBalancer Service.
+      # Subsequent → updates the container image only (no downtime).
+      - name: Deploy to AKS
+        run: |
+          JFROG_ACR_IMG="${{ env.JFROG_REGISTRY }}/${{ env.JFROG_REPO }}/${{ env.SHORT_NAME }}:${{ github.sha }}"
+
+          if kubectl get deployment ${{ env.DEPLOY_NAME }} -n ${{ env.NAMESPACE }} > /dev/null 2>&1; then
+            echo "=== Deployment already exists. Updating image only ==="
+            kubectl set image deployment/${{ env.DEPLOY_NAME }} \
+              ${{ env.CONTAINER_NAME }}="$JFROG_ACR_IMG" \
+              -n ${{ env.NAMESPACE }}
+
+          else
+            echo "=== First-time deployment. Creating Deployment and Service ==="
+            cat <<EOF | kubectl apply -f -
+          apiVersion: apps/v1
+          kind: Deployment
+          metadata:
+            name: ${{ env.DEPLOY_NAME }}
+            namespace: ${{ env.NAMESPACE }}
+          spec:
+            replicas: 3
+            selector:
+              matchLabels:
+                app: ${{ env.DEPLOY_NAME }}
+            template:
+              metadata:
+                labels:
+                  app: ${{ env.DEPLOY_NAME }}
+              spec:
+                imagePullSecrets:
+                  - name: jfrog-secret
+                containers:
+                  - name: ${{ env.CONTAINER_NAME }}
+                    image: ${JFROG_ACR_IMG}
+                    ports:
+                      - containerPort: 8000
+                    env:
+                      - name: GIT_PYTHON_REFRESH
+                        value: "quiet"
+                    envFrom:
+                      - secretRef:
+                          name: app-env
+                    resources:
+                      requests:
+                        memory: "512Mi"
+                        cpu: "250m"
+                      limits:
+                        memory: "2Gi"
+                        cpu: "1000m"
+          ---
+          apiVersion: v1
+          kind: Service
+          metadata:
+            name: ${{ env.DEPLOY_NAME }}
+            namespace: ${{ env.NAMESPACE }}
+            annotations:
+              # Restricts LoadBalancer access to the internal Azure network.
+              # Remove this annotation for public internet access.
+              service.beta.kubernetes.io/azure-load-balancer-internal: "true"
+              service.beta.kubernetes.io/azure-load-balancer-tcp-idle-timeout: "30"
+          spec:
+            selector:
+              app: ${{ env.DEPLOY_NAME }}
+            ports:
+              - protocol: TCP
+                port: 8000
+                targetPort: 8000
+            type: LoadBalancer
+          EOF
+          fi
+
+          echo "NEEDS_RESTART=true" >> "$GITHUB_ENV"
+
+      # ── 11. Wait and Check Deployment ─────────────────────────
+      # Waits up to 5 minutes for the rollout to succeed,
+      # then prints deployment / pod / service status and logs.
+      - name: Wait and Check Deployment
+        run: |
+          if [ "$NEEDS_RESTART" = "true" ]; then
+            echo "Waiting for deployment rollout..."
+            kubectl rollout status deployment/${{ env.DEPLOY_NAME }} -n ${{ env.NAMESPACE }} --timeout=5m
+          else
+            echo "No rollout triggered — pod already running with correct image."
+          fi
+          kubectl get deployment -n ${{ env.NAMESPACE }} -l app=${{ env.DEPLOY_NAME }}
+          kubectl get pods -n ${{ env.NAMESPACE }} -l app=${{ env.DEPLOY_NAME }}
+          kubectl get svc -n ${{ env.NAMESPACE }} ${{ env.DEPLOY_NAME }}
+          POD_NAME=$(kubectl get pods -n ${{ env.NAMESPACE }} -l app=${{ env.DEPLOY_NAME }} \
+                      -o jsonpath="{.items[0].metadata.name}")
+          if [ -n "$POD_NAME" ]; then
+            kubectl logs "$POD_NAME" -n ${{ env.NAMESPACE }} --tail=100 || echo "No logs available"
+          fi
+
+      # ── 12. Get App Endpoint ──────────────────────────────────
+      # Polls until the app LoadBalancer IP is assigned.
+      - name: Get App Service Endpoint
+        id: app_ip
+        run: |
+          APP_IP=""
+          for i in $(seq 1 36); do
+            APP_IP=$(kubectl get svc ${{ env.DEPLOY_NAME }} -n ${{ env.NAMESPACE }} \
+                      -o jsonpath='{.status.loadBalancer.ingress[0].ip}' 2>/dev/null || true)
+            if [ -n "$APP_IP" ]; then break; fi
+            echo "  Attempt $i/36 — retrying in 10s..."
+            sleep 10
+          done
+          echo "APP_SERVICE_IP=$APP_IP" >> "$GITHUB_OUTPUT"
+
+      # ── 13. Final Summary ─────────────────────────────────────
+      - name: Final Deployment Summary
+        run: |
+          echo "======================================================"
+          echo "              DEPLOYMENT SUMMARY"
+          echo "======================================================"
+          echo "  JFrog Build  : ${{ env.JFROG_REGISTRY }}/${{ env.JFROG_REPO }}/${{ env.JFROG_IMAGE_NAME }}:${{ github.sha }}"
+          echo "  JFrog Deploy : ${{ env.JFROG_REGISTRY }}/${{ env.JFROG_REPO }}/${{ env.SHORT_NAME }}:${{ github.sha }}"
+          echo "  ACR Mirror   : ${{ env.AZURE_CONTAINER_REGISTRY }}/${{ env.SHORT_NAME }}:${{ github.sha }}"
+          echo "  Deploy       : ${{ env.DEPLOY_NAME }}"
+          echo "  NS           : ${{ env.NAMESPACE }}"
+          echo "  Endpoint     : https://${{ steps.app_ip.outputs.APP_SERVICE_IP }}"
+          echo "======================================================"
+
+      # ── 14. Debug on Failure ──────────────────────────────────
+      # Only runs when a previous step fails. Prints pod descriptions,
+      # events, current logs, and previous container logs.
+      - name: Debug Deployment Failure
+        if: failure()
+        run: |
+          kubectl get pods -n ${{ env.NAMESPACE }} -o wide
+          kubectl get events -n ${{ env.NAMESPACE }} --sort-by='.lastTimestamp' | tail -n 30
+          POD_NAME=$(kubectl get pods -n ${{ env.NAMESPACE }} -l app=${{ env.DEPLOY_NAME }} \
+                      -o jsonpath="{.items[0].metadata.name}")
+          if [ -n "$POD_NAME" ]; then
+            kubectl describe pod "$POD_NAME" -n ${{ env.NAMESPACE }}
+            kubectl logs "$POD_NAME" -n ${{ env.NAMESPACE }} --tail=100 || echo "No logs"
+            kubectl logs "$POD_NAME" -n ${{ env.NAMESPACE }} --previous --tail=100 || echo "No previous logs"
+          fi

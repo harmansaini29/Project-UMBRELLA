@@ -1,0 +1,14 @@
+# Staging and raw repository caches
+staging/
+data/raw_repos/
+*.pyc
+__pycache__/
+.venv/
+venv/
+env/
+.env
+.env.local
+
+# OS files
+.DS_Store
+Thumbs.db

@@ -1,0 +1,227 @@
+# Tool Interrupt
+
+The Tool Interrupt feature provides users with enhanced control over how tools are executed within the framework. This feature allows users to review, modify, and approve tool executions before they are processed, giving greater transparency and control over the agent's behavior.
+
+## Overview
+
+Tool Interrupt is a toggle feature available in the inference section of the framework that changes how tools are called and executed when processing user queries.
+
+**Toggle Location** :
+
+The Tool Interrupt toggle button can be found in the **Inference** section of the framework interface.
+
+## Template Support
+
+All agent templates support both **Tool Interrupt** and **Selective Tool Interrupt** features:
+
+- **React**
+- **React Critic**
+- **Planner Executor Critic**
+- **Planner Executor**
+- **Meta**
+- **Planner Meta**
+- **Hybrid**
+
+This universal support ensures consistent human-in-the-loop control across all agent architectures.
+
+## Operating Modes
+
+**1. Without Tool Interrupt (Default Mode)**
+
+When Tool Interrupt is **disabled**, the system operates in automatic mode:
+
+- User submits a query
+- The agent automatically identifies required tools
+- Tools are called sequentially with parameters derived from the user query
+- Final answer is provided directly without user intervention
+
+**Example:**
+
+- User Query: `2-10*5`
+- System Response: `The answer is -48`
+
+**2. With Tool Interrupt (Interactive Mode)**
+
+When Tool Interrupt is **enabled**, the system operates in interactive mode :
+
+- User submits a query
+- System displays the first tool to be called with its parameters
+- User can review and modify parameters before execution
+- User approves each tool execution step-by-step
+- System shows dependent tools in sequence
+- Final answer is provided after all approvals
+
+## Tool Interrupt Workflow
+
+**Step 1: Tool Identification**
+
+When a user submits a query, the system identifies the first tool that needs to be called and displays:
+
+- **Tool Name**: The specific tool to be executed
+- **Parameters**: The arguments that will be passed to the tool
+
+**Step 2: Parameter Review and Editing**
+Users have two options:
+
+**Option A: Edit Parameters**
+
+- Click the **"Edit"** button
+- Modify the tool arguments as needed
+- Confirm changes
+
+**Option B: Approve Parameters**
+
+- Click the **"👍"** (thumbs up) button to approve current parameters
+- System proceeds with the tool execution
+
+**Step 3: Sequential Tool Execution**
+
+- After approval, the tool executes with the specified parameters
+- If additional tools are required, the system displays the next tool in the sequence
+- Process repeats until all dependent tools are executed
+
+**Step 4: Final Result**
+
+- Once all tools have been executed, the system provides the final answer
+
+**Practical Example**: Calculator Agent
+
+Let's walk through a detailed example using a Calculator Agent with the following tools:
+
+- `add(a, b)` - Addition
+- `sub(a, b)` - Subtraction  
+- `mult(a, b)` - Multiplication
+- `div(a, b)` - Division
+
+**User Query**: `2-10*5`
+
+Without Tool Interrupt:
+```
+Input: 2-10*5
+Output: The answer is -48
+```
+
+With Tool Interrupt:
+
+**Step 1:** System identifies first operation
+```
+Tool to call: mult(a, b)
+Parameters: a=10, b=5
+```
+**User Options:**
+
+- **Edit**: Click to modify the tool parameters before execution
+- **👍 Approve**: Click to proceed with the current parameters as-is
+
+Users can either edit the parameters to customize the tool execution or approve them to continue with the suggested values.
+
+
+
+**Step 2:** If user approves original parameters
+```
+Tool executed: mult(10, 5) = 50
+Next tool: sub(a, b)
+Parameters: a=2, b=50
+```
+
+**Step 3:** User approves subtraction
+```
+Tool executed: sub(2, 50) = -48
+Final Answer: -48
+```
+
+**Alternative Step 2:** If user edits multiplication parameters
+```
+Modified parameters: mult(5, 2) = 10
+Next tool: sub(a, b)
+Parameters: a=2, b=10
+```
+
+**Final Result with edited parameters:**
+```
+Tool executed: sub(2, 10) = -8
+Final Answer: -8
+```
+
+## Benefits of Tool Interrupt
+
+**Enhanced Control**
+
+- Users can intervene in the tool execution process
+- Ability to correct parameters before execution
+- Prevention of unintended tool calls
+
+**Transparency**
+
+- Clear visibility into which tools are being called
+- Understanding of parameter values being used
+- Step-by-step execution visibility
+
+**Debugging and Testing**
+- Ability to test different parameter combinations
+- Easy identification of tool execution issues
+- Validation of tool selection logic
+
+**Educational Value**
+- Understanding of how complex queries are broken down
+- Learning about tool dependencies and execution order
+- Insight into agent decision-making process
+
+## Selective Tool Interrupt
+
+**Granular Control**
+
+- Enabled selective tool interruption in LangGraph, allowing users to choose which specific tools require approval before execution.
+- Expanded support to include MCP tools and agents, providing comprehensive coverage across all tool types in the framework.
+- Users can configure interrupt behavior on a per-tool basis, enabling automatic execution for trusted tools while maintaining manual approval for sensitive operations.
+
+## Agent Interrupt (For Meta Templates)
+
+For `Meta Agent` and `Meta Planner Agent` templates, the concept of Tool Interrupt is replaced by `Agent Interrupt`. Since Meta templates orchestrate multiple worker agents rather than calling tools directly, Agent Interrupt provides control over which worker agents are invoked during query processing.
+
+**Overview**
+
+Agent Interrupt allows users to review and approve agent invocations before they are executed. This ensures transparency and control over how the Meta Agent delegates tasks to its worker agents.
+
+**How It Works**
+
+When Agent Interrupt is `enabled`:
+
+- User submits a query to the Meta Agent
+- The system displays which worker agent will be called
+- User can approve or modify the agent selection before execution
+- Process continues for each agent invocation in the workflow
+
+**Selective Agent Interrupt**
+
+Similar to Selective Tool Interrupt, **Selective Agent Interrupt** provides granular control over which worker agents require approval before invocation.
+
+**Granular Control**
+
+- Users can select specific worker agents that should trigger an interrupt before being called.
+- Trusted agents can be configured for automatic execution, while sensitive or critical agents require manual approval.
+- This allows for a balance between automation and oversight in complex multi-agent workflows.
+
+## Best Practices
+
+**Enable Tool Interrupt when:**
+
+- Testing new agent configurations
+- Working with sensitive data or operations
+- Learning how tools interact with each other
+- Debugging complex queries
+- Need precise control over tool parameters
+
+**Disable Tool Interrupt when:**
+
+- Running routine, well-tested operations
+- Processing bulk queries
+- Working with trusted tool configurations
+- Need fast, automated responses
+
+**Parameter Editing Guidelines :**
+
+- **Review Carefully**: Always review the suggested parameters before editing
+- **Understand Dependencies**: Consider how parameter changes might affect subsequent tools
+- **Test Incrementally**: Make small changes and observe results
+- **Document Changes**: Keep track of parameter modifications for future reference

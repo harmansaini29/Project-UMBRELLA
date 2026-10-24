@@ -1,0 +1,1174 @@
+# © 2024-25 Infosys Limited, Bangalore, India. All Rights Reserved.
+import json
+import asyncio
+import os
+from typing import Any, Dict, List, Optional, AsyncGenerator, Literal, Callable
+
+from openai import AzureOpenAI, AsyncAzureOpenAI
+from openai.types.chat import ChatCompletionChunk
+from openai.types.chat import ChatCompletionMessage, ChatCompletionMessageToolCall
+
+from src.models.base_ai_model_service import BaseAIModelService
+from src.database.repositories import ChatStateHistoryManagerRepository
+
+from telemetry_wrapper import logger as log
+from src.utils.guardrail_helpers import is_guardrail_exception
+
+# Define a type for the streaming chunks for better clarity
+# You can customize this structure to fit your frontend's needs
+StreamChunkType = Dict[str, Any]
+
+# Global hook registry for post-completion callbacks
+_post_completion_hooks: List[Callable] = []
+
+def register_post_completion_hook(hook: Callable):
+    """
+    Register a hook to be called after every LLM completion.
+    Hook signature: async def hook(response, agent_context: Dict) -> None
+    
+    Args:
+        hook: Async function that takes (response, agent_context) as arguments
+    """
+    if hook not in _post_completion_hooks:
+        _post_completion_hooks.append(hook)
+        log.info(f"✅ [HookRegistry] Registered post-completion hook: {hook.__name__}")
+        log.info(f"📊 [HookRegistry] Total hooks registered: {len(_post_completion_hooks)}")
+    else:
+        log.warning(f"⚠️ [HookRegistry] Hook {hook.__name__} already registered")
+
+def unregister_post_completion_hook(hook: Callable):
+    """Unregister a previously registered hook"""
+    if hook in _post_completion_hooks:
+        _post_completion_hooks.remove(hook)
+        log.info(f"[AzureAIModelService] Unregistered post-completion hook: {hook.__name__}")
+
+
+async def token_usage_logging_hook(response, agent_context: Dict[str, Any]):
+    """
+    Post-completion hook for logging token usage from LLM calls (both proxy and direct).
+    
+    This hook is automatically called after every LLM completion when registered.
+    Uses the standalone tracker to log to PostgreSQL database WITH AUTOMATIC CATEGORIZATION.
+    
+    Args:
+        response: The LLM response object (ChatCompletion) with .usage attribute
+        agent_context: Dictionary containing agent_id, session_id, user_id, model_name
+    """
+    try:
+        use_litellm_proxy = os.getenv("USE_LITELLM_PROXY_FLAG", "false").lower() == "true"
+        log.info(f"🔍 [TokenUsageHook] Starting hook - USE_LITELLM_PROXY_FLAG={use_litellm_proxy}")
+        
+        # Debug: Print complete response structure
+        log.info(f"📦 [TokenUsageHook] Response type: {type(response)}")
+        log.info(f"📦 [TokenUsageHook] Response has 'usage': {hasattr(response, 'usage')}")
+        
+        # Try to print the full response object (with truncation for safety)
+        try:
+            response_str = str(response)
+            if len(response_str) > 2000:
+                log.info(f"📦 [TokenUsageHook] Complete response (truncated): {response_str[:2000]}...")
+            else:
+                log.info(f"📦 [TokenUsageHook] Complete response: {response_str}")
+        except Exception as print_err:
+            log.warning(f"⚠️ [TokenUsageHook] Could not print response: {print_err}")
+        
+        # Use standalone tracker (no litellm_backend dependency!)
+        from litellm_standalone_tracker import log_token_usage
+        log.info(f"✅ [TokenUsageHook] Using standalone tracker to log tokens")
+        
+        # 🆕 AUTOMATIC CATEGORIZATION
+        from call_categorizer import auto_categorize_llm_call
+        categorization = auto_categorize_llm_call()
+        log.info(f"🏷️ [TokenUsageHook] Auto-categorized: {categorization}")
+        
+        # 🆕 Extract user_id from session context (OpenTelemetry tracking)
+        from telemetry_wrapper import SessionContext
+        session_ctx = SessionContext.get()
+        
+        # 🔍 DEBUG: Log the ENTIRE session context tuple to see all values
+        log.info(f"🔍 [TokenUsageHook] FULL Session Context Tuple: {session_ctx}")
+        log.info(f"🔍 [TokenUsageHook] Tuple length: {len(session_ctx) if session_ctx else 0}")
+        
+        user_id_from_session = session_ctx[0] if session_ctx[0] != 'Unassigned' else None  # user_id is first element
+        session_id_from_session = session_ctx[1] if session_ctx[1] != 'Unassigned' else None  # session_id is second
+        agent_id_from_session = session_ctx[3] if session_ctx[3] != 'Unassigned' else None  # agent_id is fourth
+        tool_id_from_session = session_ctx[5] if session_ctx[5] != 'Unassigned' else None  # tool_id is sixth
+        tool_name_from_session = session_ctx[6] if session_ctx[6] != 'Unassigned' else None  # tool_name is seventh
+        deployment_model_from_session = session_ctx[7] if session_ctx[7] != 'Unassigned' else None  # model_used is eighth
+        department_from_session = session_ctx[21] if len(session_ctx) > 21 and session_ctx[21] != 'Unassigned' else None
+        
+        log.info(f"📋 [TokenUsageHook] Session context: user_id={user_id_from_session}, session_id={session_id_from_session}, agent_id={agent_id_from_session}, tool_id={tool_id_from_session}, tool_name={tool_name_from_session}")
+        
+        # Extract token usage
+        prompt_tokens = 0
+        completion_tokens = 0
+        total_tokens = 0
+        cached_tokens = 0
+        model_name = None
+        
+        if hasattr(response, 'usage'):
+            usage = response.usage
+            log.info(f"📊 [TokenUsageHook] Usage object found: {usage}")
+            log.info(f"📊 [TokenUsageHook] Usage type: {type(usage)}")
+            
+            prompt_tokens = getattr(usage, 'prompt_tokens', 0)
+            completion_tokens = getattr(usage, 'completion_tokens', 0)
+            total_tokens = getattr(usage, 'total_tokens', 0)
+            cached_tokens = getattr(usage, 'cached_tokens', 0)
+            
+            log.info(f"📊 [TokenUsageHook] Direct extraction: prompt={prompt_tokens}, completion={completion_tokens}, total={total_tokens}, cached={cached_tokens}")
+            
+            if not cached_tokens:
+                prompt_tokens_details = getattr(usage, 'prompt_tokens_details', None)
+                log.info(f"📊 [TokenUsageHook] Prompt tokens details: {prompt_tokens_details}")
+                if prompt_tokens_details:
+                    cached_tokens = getattr(prompt_tokens_details, 'cached_tokens', 0)
+                    log.info(f"📊 [TokenUsageHook] Cached tokens from details: {cached_tokens}")
+        else:
+            log.warning(f"⚠️ [TokenUsageHook] Response does NOT have 'usage' attribute!")
+            log.warning(f"⚠️ [TokenUsageHook] Available attributes: {[attr for attr in dir(response) if not attr.startswith('_')]}")
+        
+        # Extract model name from response or agent context
+        if hasattr(response, 'model'):
+            model_name = response.model
+            log.info(f"📊 [TokenUsageHook] Model name from response: {model_name}")
+        elif agent_context.get('model_name'):
+            model_name = agent_context.get('model_name')
+            log.info(f"📊 [TokenUsageHook] Model name from agent context: {model_name}")
+        else:
+            log.warning(f"⚠️ [TokenUsageHook] No model name found in response or context!")
+        
+        if total_tokens > 0:
+            log.info(
+                f"📊 [TokenUsageHook] Final extracted values: prompt={prompt_tokens}, cached={cached_tokens}, "
+                f"completion={completion_tokens}, total={total_tokens}, model={model_name}"
+            )
+            
+            log.info(f"💾 [TokenUsageHook] Attempting to log to database...")
+            log.info(f"💾 [TokenUsageHook] Agent context: {agent_context}")
+            log.info(f"💾 [TokenUsageHook] Model name to log: {model_name or agent_context.get('model_name')}")
+            
+            # Merge context: prioritize agent_context, fallback to session context
+            log.info(f"🔍 [TokenUsageHook] agent_context.get('session_id'): {agent_context.get('session_id')} (type: {type(agent_context.get('session_id'))})")
+            log.info(f"🔍 [TokenUsageHook] session_id_from_session: {session_id_from_session} (type: {type(session_id_from_session)})")
+            
+            final_user_id = agent_context.get('user_id') or user_id_from_session
+            final_session_id = agent_context.get('session_id') or session_id_from_session
+            final_agent_id = agent_context.get('agent_id') or agent_id_from_session
+            final_tool_id = categorization.get('tool_id') or tool_id_from_session
+            final_tool_name = categorization.get('tool_name') or tool_name_from_session
+            
+            # If tool_id is a UUID string, don't use it (database expects integer ID, not UUID)
+            if final_tool_id and isinstance(final_tool_id, str) and '-' in final_tool_id:
+                log.info(f"💾 [TokenUsageHook] Skipping UUID tool_id (database expects integer): {final_tool_id}")
+                final_tool_id = None
+            
+            log.info(f"💾 [TokenUsageHook] Final context: user_id={final_user_id}, session_id={final_session_id} (type: {type(final_session_id)}), agent_id={final_agent_id}, tool_id={final_tool_id}, tool_name={final_tool_name}")
+            
+            # Use standalone tracker WITH AUTO-CATEGORIZATION
+            await log_token_usage(
+                model_name=model_name or agent_context.get('model_name'),
+                deployment_model=deployment_model_from_session,
+                prompt_tokens=prompt_tokens,
+                completion_tokens=completion_tokens,
+                total_tokens=total_tokens,
+                cached_tokens=cached_tokens,
+                agent_id=final_agent_id,
+                agent_name=None,
+                session_id=final_session_id,
+                user_id=final_user_id,
+                request_id=agent_context.get('request_id'),
+                status="success",
+                call_category=categorization.get('call_category'),
+                call_sub_category=categorization.get('call_sub_category'),
+                call_operation=categorization.get('call_operation'),
+                agent_type=categorization.get('agent_type'),
+                agent_component=categorization.get('agent_component'),
+                evaluation_type=categorization.get('evaluation_type'),
+                tool_id=final_tool_id,
+                tool_name=final_tool_name,
+                department_name=department_from_session,
+            )
+            log.info(
+                f"✅ [TokenUsageHook] Successfully logged to DB: Agent={agent_context.get('agent_id')}, "
+                f"Category={categorization.get('call_category')}, SubCategory={categorization.get('call_sub_category')}, "
+                f"Model={model_name or agent_context.get('model_name')}, Total={total_tokens}"
+            )
+
+            # Feed per-call data into the per-request accumulator so the endpoint
+            # can later inject per-query totals into the LangGraph checkpoint and DB.
+            if final_session_id:
+                from litellm_standalone_tracker import record_to_accumulator, calculate_cost
+                call_model = model_name or agent_context.get('model_name')
+                costs = calculate_cost(call_model, prompt_tokens, completion_tokens, cached_tokens,
+                                       fallback_model=deployment_model_from_session)
+                record_to_accumulator(final_session_id, {
+                    "model":             call_model,
+                    "agent_name":        agent_context.get('agent_name'),
+                    "prompt_tokens":     prompt_tokens,
+                    "completion_tokens": completion_tokens,
+                    "total_tokens":      total_tokens,
+                    "cached_tokens":     cached_tokens,
+                    "prompt_cost":       costs["prompt_cost"],
+                    "completion_cost":   costs["completion_cost"],
+                    "cached_cost":       costs["cached_cost"],
+                    "total_cost":        costs["total_cost"],
+                    "call_category":     categorization.get('call_category'),
+                    "call_sub_category": categorization.get('call_sub_category'),
+                    "status":            "success",
+                })
+                log.info(
+                    f"📥 [TokenUsageHook] Appended to per-query accumulator: "
+                    f"session={final_session_id}, model={call_model}, "
+                    f"total={total_tokens}, cost=${costs['total_cost']:.8f}"
+                )
+            else:
+                log.debug("⏭️  [TokenUsageHook] No session_id — cannot append to accumulator")
+        else:
+            log.warning(f"⚠️ [TokenUsageHook] Total tokens is 0 or negative - skipping DB logging")
+            
+    except Exception as e:
+        log.error(f"❌ [TokenUsageHook] Error: {e}", exc_info=True)
+
+class AzureAIModelService(BaseAIModelService):
+    """
+    Concrete implementation of BaseAIModelService for Azure OpenAI models.
+    """
+
+    def __init__(
+        self,
+        api_key: str,
+        api_base: str, # Azure endpoint
+        api_version: str, # Azure API version, e.g., "2023-12-01-preview"
+        model: Optional[str] = None,
+        temperature: Optional[float] = None,
+        chat_history_manager: Optional[ChatStateHistoryManagerRepository] = None,
+        extra_headers: Optional[Dict[str, str]] = None,
+        gateway_mode: bool = False
+    ):
+        super().__init__(
+            api_key=api_key,
+            api_base=api_base,
+            api_version=api_version,
+            model=model,
+            temperature=temperature,
+            chat_history_manager=chat_history_manager,
+            extra_headers=extra_headers,
+            gateway_mode=gateway_mode
+        )
+
+        if not self._api_key or not self._api_base or not self._api_version:
+            raise ValueError("For AzureAIAgent, 'api_key', 'api_base' and 'api_version' must be provided.")
+
+        if self._gateway_mode:
+            # Gateway mode: use base_url (not azure_endpoint) so the SDK sends to
+            # {base_url}/chat/completions?api-version=X without inserting /openai/ in the path.
+            # Extra headers (e.g. Authorization token) are set as default_headers on the client.
+            _gw_headers = dict(self._extra_headers) if self._extra_headers else {}
+            self._client = AzureOpenAI(
+                api_key=self._api_key,
+                api_version=self._api_version,
+                base_url=self._api_base,
+                default_headers=_gw_headers or None,
+            )
+            self._async_client = AsyncAzureOpenAI(
+                api_key=self._api_key,
+                api_version=self._api_version,
+                base_url=self._api_base,
+                default_headers=_gw_headers or None,
+            )
+            log.info(f"[AzureAIModelService] Initialized in GATEWAY mode. Base URL: {self._api_base}")
+        else:
+            self._client = AzureOpenAI(
+                api_key=self._api_key,
+                api_version=self._api_version,
+                azure_endpoint=self._api_base
+            )
+            self._async_client = AsyncAzureOpenAI(
+                api_key=self._api_key,
+                api_version=self._api_version,
+                azure_endpoint=self._api_base
+            )
+            log.info(f"[AzureAIModelService] Initialized.")
+
+    async def _trigger_post_completion_hooks(self, response, agent_context: Dict[str, Any]):
+        """
+        Trigger all registered post-completion hooks.
+        
+        Args:
+            response: The LLM response object (has .usage attribute with token info)
+            agent_context: Dictionary containing agent_id, session_id, user_id, model_name, etc.
+        """
+        log.info(f"🪝 [HookTrigger] Triggering {len(_post_completion_hooks)} registered hook(s)")
+        
+        if not _post_completion_hooks:
+            log.warning(f"⚠️ [HookTrigger] No hooks registered!")
+            return
+        
+        for hook in _post_completion_hooks:
+            try:
+                log.info(f"🪝 [HookTrigger] Executing hook: {hook.__name__}")
+                await hook(response, agent_context)
+                log.info(f"✅ [HookTrigger] Hook {hook.__name__} completed successfully")
+            except Exception as e:
+                log.error(f"❌ [HookTrigger] Error in hook {hook.__name__}: {e}", exc_info=True)
+
+    async def astream(
+        self,
+        messages: Optional[List[Dict[str, str]]] = None,
+        config: Optional[Dict[str, Any]] = None,
+    ) -> AsyncGenerator[Dict[str, Any], None]:
+        """
+        Invokes the Azure agent with a list of messages, handling multi-turn conversations,
+        parallel tool calls, chat history, and tool interruption.
+
+        Args:
+            messages: A list of message dictionaries (e.g., [{"role": "user", "content": "..."}]).
+                      If None, the agent attempts to resume an interrupted chat.
+            config: Optional dictionary for configurable parameters:
+                - "configurable":
+                    - "thread_id": (str) Unique ID for the conversation thread. If not provided,
+                                   chat history will not be stored or retrieved.
+                    - "history_lookback": (int) Number of previous 'agent_steps' entries to consider
+                                          for context. If None, all available history is used.
+                    - "resume_previous_chat": (bool) If True, attempts to resume the most recent
+                                              chat entry for the thread_id, updating it instead
+                                              of creating a new one.
+                    - "store_response_custom_metadata": (bool) If True, stores custom metadata
+                                              from the final LLM response in the chat history. Default is False.
+                - "tool_choice": (str) Strategy for tool selection by the LLM. Default is "auto".
+                - "tool_interrupt": (bool) If True, the agent will pause and return tool calls
+                                    for user approval/modification before execution.
+                - "tools_to_interrupt": (Optional[List[str]]) A list of tool names that should trigger
+                                        an interrupt when called. If tool_interrupt is True and this is None,
+                                        all tool calls will be interrupted. If tool_interrupt is True and this
+                                        is a list, only tool calls with names in this list will be interrupted.
+                                        If tool_interrupt is False, this parameter is ignored.
+                - "parallel_tool_calls": (bool) If True, allows the LLM to request multiple tool calls
+                                             in a single response. Default is False.
+                - "updated_tool_calls": (Union[List[Dict], Dict])
+                    - If a list, each item should be a dictionary with keys:
+                        - "id": (str) The tool_call_id of the tool to update.
+                        - "updated_arguments": (Dict) The new arguments for the tool.
+                    This is used when resuming an interrupted chat to modify tool arguments for multiple tool calls.
+                    - If a dict, it should be the argument dictionary for the first tool call only.
+                    This is typically used when parallel tool calls are disabled and only the first tool call's arguments need to be updated.
+        """
+        if not self._model:
+            raise ValueError("Model not set.")
+
+        if messages and isinstance(messages, str):
+            messages = [self.format_content_with_role(messages)]
+
+        # --- 1. Setup Configuration (Same as ainvoke) ---
+        config = config or {}
+        configurable: dict = config.get("configurable", {})
+        thread_id = configurable.get("thread_id", None)
+        history_lookback = configurable.get("history_lookback", None)
+        resume_previous_chat = configurable.get("resume_previous_chat", False)
+        store_response_custom_metadata = configurable.get("store_response_custom_metadata", False)
+        tool_choice = config.get("tool_choice", "auto")
+        tool_interrupt = config.get("tool_interrupt", False)
+        tools_to_interrupt: Optional[List[str]] = config.get("tools_to_interrupt", None)
+        parallel_tool_calls = config.get("parallel_tool_calls", not tool_interrupt)
+        tool_reject = config.get("tool_reject", False)
+        
+        # Log the tool interrupt configuration
+        if tool_interrupt:
+            if tools_to_interrupt:
+                tools_to_interrupt = set(tools_to_interrupt)
+                log.info(f"[Agent Stream] Selective tool interrupt enabled for tools: {tools_to_interrupt}")
+            else:
+                log.info("[Agent Stream] Tool interrupt enabled for ALL tools.")
+        else:
+            tools_to_interrupt = None  # Ensure it's None if interrupt is disabled
+
+        updated_tool_calls: List[Dict[str, Any]] = config.get("updated_tool_calls", None)
+        if not updated_tool_calls:
+            updated_tool_calls = []
+        elif isinstance(updated_tool_calls, dict):
+            updated_tool_calls = [{"id": self.first_tool_id_placeholder, "updated_arguments": updated_tool_calls}]
+
+        max_tool_call_iterations = self._agent_config_kwargs.get("max_tool_call_iterations", 25)
+
+        current_turn_messages: List[Dict[str, Any]] = []
+        conversation_history: List[Dict[str, Any]] = []
+
+        # --- 2. Load History (Same as ainvoke) ---
+        if self._system_prompt:
+            conversation_history.append(self.format_content_with_role(self._system_prompt, "system"))
+
+        current_entry_id: Optional[int] = None
+        initial_user_query: Optional[str] = None
+
+        store_chat = bool(thread_id and self._chat_history_manager)
+        log.debug(f"[Agent Stream] Chat history storage enabled: {store_chat}")
+
+        most_recent_entry_id = most_recent_entry_data = None
+        if store_chat:
+            most_recent_entry_id, most_recent_entry_data = await self._chat_history_manager.get_most_recent_chat_entry(thread_id)
+
+            if most_recent_entry_data:
+                most_recent_agent_steps = most_recent_entry_data.get("agent_steps", [])
+                pending_tool_calls = most_recent_agent_steps[-1].get("tool_calls", None) if most_recent_agent_steps else None
+
+                if pending_tool_calls and messages:
+                    log.info(f"[Agent Stream] New query received while chat {most_recent_entry_id} was interrupted. Deleting old interrupted state.")
+                    await self._chat_history_manager.delete_chat_entry(most_recent_entry_id, thread_id)
+                    most_recent_entry_id = most_recent_entry_data = None
+                    resume_previous_chat = False
+
+                elif pending_tool_calls or resume_previous_chat:
+                    resume_previous_chat = True
+                    current_entry_id = most_recent_entry_id
+                    current_turn_messages.extend(most_recent_agent_steps)
+
+                    if pending_tool_calls:
+                        log.info(f"[Agent Stream] Resuming interrupted chat {current_entry_id} for thread '{thread_id}'.")
+
+                        if tool_reject:
+                            log.info(f"[Agent Stream] User REJECTED tool execution. Injecting decline messages.")
+                            yield {"raw": {"tool_reject": "User declined the tool execution."}, "content": "User declined the tool execution."}
+                            for tool_call in pending_tool_calls:
+                                tool_call_name = tool_call["function"]["name"]
+                                reject_message = {
+                                    "tool_call_id": tool_call["id"],
+                                    "role": "tool",
+                                    "name": tool_call_name,
+                                    "content": json.dumps({"status": "rejected", "message": f"Tool '{tool_call_name}' execution was declined by the user. The tool was NOT executed. Do not retry this tool call."}),
+                                }
+                                current_turn_messages.append(reject_message)
+                        else:
+                            updated_tool_calls_dict = {tc["id"]: tc["updated_arguments"] for tc in updated_tool_calls}
+
+                            if len(pending_tool_calls)==1 and self.first_tool_id_placeholder in updated_tool_calls_dict:
+                                updated_tool_calls_dict[pending_tool_calls[0]["id"]] = updated_tool_calls_dict[self.first_tool_id_placeholder]
+                                log.info(f"  [Agent Stream] Mapped placeholder ID to actual tool_call_id '{pending_tool_calls[0]['id']}', for single tool call update.")
+
+                            # Check if user updated arguments or just approved
+                            has_updates = bool(updated_tool_calls_dict)
+                            if has_updates:
+                                yield {"raw": {"tool_interrupt_update_argument": "User updated the tool arguments."}, "content": "User updated the tool arguments. Updating the agent state accordingly."}
+                            else:
+                                yield {"raw": {"tool_verifier": "User approved the tool execution."}, "content": "User approved the tool execution by clicking the thumbs up button."}
+
+                            tool_execution_tasks = []
+                            for tool_call in pending_tool_calls:
+                                if tool_call["id"] in updated_tool_calls_dict:
+                                    # Update tool call arguments with user-provided updates
+                                    reference_args = json.loads(tool_call["function"]["arguments"])
+                                    updated_tool_calls_dict[tool_call["id"]] = self.convert_value_type_of_candidate_as_given_in_reference(
+                                                                                        reference=reference_args,
+                                                                                        candidate=updated_tool_calls_dict[tool_call["id"]]
+                                                                                    )
+                                    tool_call["function"]["arguments"] = json.dumps(updated_tool_calls_dict[tool_call["id"]])
+                                    if reference_args != updated_tool_calls_dict[tool_call["id"]]:
+                                        tool_call["function"]["original_arguments"] = reference_args
+                                    log.info(f"  [Agent Stream] Applied user update for tool '{tool_call['function']['name']}' (ID: {tool_call['id']}).")
+
+                                tool_execution_tasks.append(self._execute_tool_call(tool_call))
+
+                            tool_outputs = await asyncio.gather(*tool_execution_tasks)
+                            for tool_output, tool_call in zip(tool_outputs, pending_tool_calls):
+                                tool_call_name = tool_call["function"]["name"]
+                                original_args = tool_call["function"].get("original_arguments", None)
+                                if original_args:
+                                    updated_args = updated_tool_calls_dict.get(tool_call["id"])
+                                    note_msg = (
+                                        f"The tool '{tool_call_name}' was originally called with arguments {original_args}. "
+                                        f"However, as part of the human-in-the-loop process, the user explicitly updated the arguments to {updated_args}. "
+                                        f"Consequently, the tool was executed using these updated arguments ({updated_args}). "
+                                        "Please proceed with the understanding that the operation was performed using the user-specified values."
+                                    )
+                                    tool_output = {"tool_response": tool_output, "Note": note_msg}
+                                tool_message = {
+                                    "tool_call_id": tool_call["id"],
+                                    "role": "tool",
+                                    "name": tool_call_name,
+                                    "content": json.dumps(tool_output),
+                                }
+                                current_turn_messages.append(tool_message)
+                                yield {"raw": {"Tool Name": tool_call_name, "Tool Output": tool_output}, "content": f"Tool {tool_call_name} returned: {tool_output}"}
+                                yield {"Node Name": "Tool Call", "Status": "Completed", "Tool Name": tool_call_name}
+
+                        
+                        log.info(f"[Agent] Resuming interrupted chat {most_recent_entry_id} for thread '{thread_id}' with {len(current_turn_messages)} messages.")
+
+
+        if messages:
+            current_turn_messages.extend(messages)
+        elif not current_turn_messages:
+            log.error("[Agent Stream] No messages provided and no previous chat to resume.")
+            raise ValueError("Messages is None, and no previous chat to resume.")
+        
+        initial_user_query = current_turn_messages[0]["content"]
+
+
+        if store_chat:
+            if resume_previous_chat and history_lookback is not None:
+                history_lookback += 1
+
+            history_entries = await self._chat_history_manager.get_recent_history(thread_id, history_lookback)
+            if resume_previous_chat and history_entries:
+                history_entries.pop()
+
+            for entry in history_entries:
+                # Add previous agent_steps to conversation history for context
+                conversation_history.extend(entry["agent_steps"])
+            log.info(f"[Agent] Loaded {len(history_entries)} previous turns for context.")
+
+
+        conversation_history.extend(current_turn_messages)
+        iteration = 0
+        final_llm_response_content: Optional[str] = None
+        yield {"Node Name": "Thinking...", "Status": "Started"}
+        while iteration < max_tool_call_iterations:
+            iteration += 1
+            # yield {"Node Name": "Thinking...", "Status": "Started"}
+            try:
+                completion_params = {
+                    "model": self._model,
+                    "messages": conversation_history,
+                    "temperature": self._temperature,
+                    # "stream": True  # ENABLE STREAMING
+                    # "stream_options": {"include_usage": True}  # Include token usage in streaming response
+                }
+
+                if self._tools_json_schema:
+                    completion_params["tools"] = self._tools_json_schema
+                    completion_params["tool_choice"] = tool_choice
+                    completion_params["parallel_tool_calls"] = parallel_tool_calls
+
+                log.info(f"[Agent Stream] Iteration {iteration}: Requesting stream...")
+                # Emit Thinking started event
+                
+                # Get agent context and add as extra headers for LiteLLM tracking
+                from src.models.guardrail_aware_llm import _ctx_from_session
+                agent_ctx = _ctx_from_session()
+                extra_headers = {}
+                if agent_ctx.get('agent_id'):
+                    extra_headers['x-agent-id'] = agent_ctx['agent_id']
+                if agent_ctx.get('agent_name'):
+                    extra_headers['x-agent-name'] = agent_ctx['agent_name']
+                if agent_ctx.get('session_id'):
+                    extra_headers['x-session-id'] = agent_ctx['session_id']
+                if agent_ctx.get('user_id'):
+                    extra_headers['x-user-id'] = agent_ctx['user_id']
+                
+                # Merge instance-level extra headers (e.g. gateway auth token)
+                if self._extra_headers:
+                    extra_headers.update(self._extra_headers)
+
+                if extra_headers:
+                    completion_params['extra_headers'] = extra_headers
+                
+                # Use ASYNC client here
+                stream = await self._async_client.chat.completions.create(**completion_params)
+                response_message: ChatCompletionMessage = stream.choices[0].message
+                
+                # Trigger post-completion hooks for token logging
+                await self._trigger_post_completion_hooks(stream, agent_ctx)
+                
+                # # Storage for reconstructing the streamed message
+                # collected_content: List[str] = []
+                # collected_tool_calls: Dict[int, Dict[str, str]] = {}  # Index -> {id, name, arguments}
+
+                # # --- 4. Stream Chunk Processing --- (aggregate tokens, do NOT emit each delta)
+                # async for chunk in stream:
+                #     delta = chunk.choices[0].delta
+
+                #     # A. Handle Text Content - Collect but don't yield yet
+                #     if delta.content:
+                #         collected_content.append(delta.content)
+
+                #     # B. Handle Tool Call Fragments
+                #     if delta.tool_calls:
+                #         for tc in delta.tool_calls:
+                #             idx = tc.index
+                #             if idx not in collected_tool_calls:
+                #                 collected_tool_calls[idx] = {
+                #                     "id": tc.id,
+                #                     "name": tc.function.name,
+                #                     "arguments": ""
+                #                 }
+                #             # Append argument fragments
+                #             if tc.function.arguments:
+                #                 collected_tool_calls[idx]["arguments"] += tc.function.arguments
+                # Add LLM's message to current turn and full history
+                current_turn_messages.append(response_message.model_dump(exclude_unset=True))
+                conversation_history.append(response_message.model_dump(exclude_unset=True))
+                
+                if store_response_custom_metadata and response_message.content:
+                    parsed_response = await self._json_output_parser(response_message.content)
+                    if isinstance(parsed_response, dict) and "error" not in parsed_response:
+                        current_turn_messages[-1]["response_custom_metadata"] = parsed_response
+
+                
+                # --- 6. Handle Tool Execution or Exit ---
+                if response_message.tool_calls:
+                    yield ({"raw": {"thinking_completed": "Thinking completed. Proceeding to tool calls."}, "content": "Thinking completed. Proceeding to tool calls."})
+                    log.info(f"[Agent Stream] Collected {len(response_message.tool_calls)} tool calls.")
+
+                    # Determine if we should interrupt based on selective tool interrupt logic
+                    should_interrupt = False
+                    if tool_interrupt:
+                        if tools_to_interrupt is None:
+                            # If tools_to_interrupt is None, interrupt all tool calls
+                            should_interrupt = True
+                            log.debug("[Agent Stream] tools_to_interrupt is None, will interrupt all tool calls.")
+                        else:
+                            # Check if any of the requested tool calls are in the tools_to_interrupt set
+                            requested_tool_names = [tc.function.name for tc in response_message.tool_calls]
+                            matching_tools = [name for name in requested_tool_names if name in tools_to_interrupt]
+                            if matching_tools:
+                                should_interrupt = True
+                                log.info(f"[Agent Stream] Selective interrupt triggered. Matching tools: {matching_tools}")
+                            else:
+                                log.info(f"[Agent Stream] No tools in interrupt list. Requested tools: {requested_tool_names}, Interrupt list: {tools_to_interrupt}. Proceeding without interrupt.")
+
+                    if should_interrupt:
+                        # Handle interrupt logic - structured interrupt request
+                        log.info("[Agent Stream] Tool interrupt flag is ON. Interrupting for user approval.")
+                        
+                        # Emit Tool Call Started for each pending tool call before interrupt
+                        for tool_call in response_message.tool_calls:
+                            try:
+                                tool_args = json.loads(tool_call.function.arguments) if tool_call.function.arguments else {}
+                            except json.JSONDecodeError:
+                                tool_args = tool_call.function.arguments
+                            
+                            tool_name = tool_call.function.name
+                            yield {"Node Name": "Tool Call", "Status": "Started", "Tool Name": tool_name, "Tool Arguments": tool_args if isinstance(tool_args, dict) else {"raw": tool_args}}
+                            
+                            # Tool call announcement content
+                            if tool_args and isinstance(tool_args, dict):
+                                args_str = ", ".join(f"{k}={v}" for k, v in tool_args.items())
+                                yield {"raw": {"content_display": f"Agent called the tool '{tool_name}', passing arguments: {args_str}."}, "content": f"Agent called the tool '{tool_name}', passing arguments: {args_str}."}
+                            else:
+                                yield {"raw": {"content_display": f"Agent called the tool '{tool_name}', passing no arguments."}, "content": f"Agent called the tool '{tool_name}', passing no arguments."}
+                        
+                        if store_chat:
+                            if current_entry_id:
+                                await self._chat_history_manager.update_chat_entry(
+                                    entry_id=current_entry_id,
+                                    thread_id=thread_id,
+                                    agent_steps=current_turn_messages,
+                                    final_response=None # Still interrupted
+                                )
+                            else:
+                                current_entry_id = await self._chat_history_manager.add_chat_entry(
+                                    thread_id=thread_id,
+                                    user_query=initial_user_query,
+                                    agent_steps=current_turn_messages,
+                                    final_response=None # Mark as potentially interrupted or ongoing
+                                )
+                        yield ({"raw": {"tool_verifier": "Please confirm tool execution."}, "content": "Tool execution requires confirmation. Please approve to proceed."})
+                        yield {"Node Name": "Thinking...", "Status": "Completed"}
+                       
+
+                        yield {
+                            "user_query": initial_user_query,
+                            "final_response": None,
+                            "agent_steps": current_turn_messages
+                        }
+                        return
+
+                    tool_calls_for_execution: List[ChatCompletionMessageToolCall] = response_message.tool_calls
+
+                    
+                    for tool_call in tool_calls_for_execution:
+                        # Parse arguments for display
+                        try:
+                            tool_args = json.loads(tool_call.function.arguments) if tool_call.function.arguments else {}
+                        except json.JSONDecodeError:
+                            tool_args = tool_call.function.arguments
+                        
+                        tool_name = tool_call.function.name
+                        
+                        # Emit Tool Call Started event
+                        yield {"Node Name": "Tool Call", "Status": "Started", "Tool Name": tool_name, "Tool Arguments": tool_args if isinstance(tool_args, dict) else {"raw": tool_args}}
+
+                        # Tool call announcement content (kept separate like other agents)
+                        if tool_args and isinstance(tool_args, dict):
+                            args_str = ", ".join(f"{k}={v}" for k, v in tool_args.items())
+                            yield {"raw": {"content_display": f"Agent called the tool '{tool_name}', passing arguments: {args_str}."}, "content": f"Agent called the tool '{tool_name}', passing arguments: {args_str}."}
+                        else:
+                            yield {"raw": {"content_display": f"Agent called the tool '{tool_name}', passing no arguments."}, "content": f"Agent called the tool '{tool_name}', passing no arguments."}
+                    # Execute Tools (Parallel)
+                    tool_execution_tasks = [
+                        self._execute_tool_call(tool_call)
+                        for tool_call in tool_calls_for_execution
+                    ]
+                    tool_results = await asyncio.gather(*tool_execution_tasks)
+                    
+                    # Append Tool Outputs and yield results
+                    for i, tool_call in enumerate(tool_calls_for_execution):
+                        tool_output = tool_results[i]
+                        tool_message = {
+                            "tool_call_id": tool_call.id,
+                            "role": "tool",
+                            "name": tool_call.function.name,
+                            "content": json.dumps(tool_output),
+                        }
+                        current_turn_messages.append(tool_message)
+                        conversation_history.append(tool_message)
+                        
+                        # Emit Tool Result (raw + content pattern)
+                        yield {"raw": {"Tool Name": tool_call.function.name, "Tool Output": tool_output}, "content": f"Tool {tool_call.function.name} returned: {tool_output}"}
+                        # Emit Tool Call Completed status
+                        yield {"Node Name": "Tool Call", "Status": "Completed", "Tool Name": tool_call.function.name}
+                    log.info(f"[Agent] Added {len(tool_results)} tool output(s) to history. Re-querying LLM.")
+                    
+
+                else:
+                    # No tools called, treat this iteration's response as final
+                    log.info("[Agent Stream] Final response complete (no tools).")
+                    # Emit Thinking completion event only when no tool calls
+                    # yield ({"raw": {"Final_response": "Thinking completed proceeding to final response"}, "content": "Thinking completed proceeding to final response"}) 
+                    yield {"Node Name": "Thinking...", "Status": "Completed"}
+                    final_llm_response_content = response_message.content
+                    break
+            except Exception as e:
+                if is_guardrail_exception(e):
+                    log.warning(f"[Agent Stream] Guardrail/content-policy violation during astream: {e}")
+                else:
+                    log.error(f"[Agent Stream] An error occurred during astream: {e}", exc_info=True)
+                yield {
+                    "error": f"LLM interaction error: {e}",
+                    "user_query": initial_user_query,
+                    "final_response": None,
+                    "agent_steps": current_turn_messages
+                }
+                return
+        # --- 7. Save Chat History ---
+        if store_chat:
+             # Use the same logic as ainvoke to save/update DB
+             if current_entry_id:
+                await self._chat_history_manager.update_chat_entry(
+                    entry_id=current_entry_id,
+                    thread_id=thread_id,
+                    agent_steps=current_turn_messages,
+                    final_response=final_llm_response_content
+                )
+             else:
+                await self._chat_history_manager.add_chat_entry(
+                    thread_id=thread_id,
+                    user_query=initial_user_query,
+                    agent_steps=current_turn_messages,
+                    final_response=final_llm_response_content
+                )
+  
+
+        if final_llm_response_content is None:
+            yield {
+                "error": f"Max tool call iterations ({max_tool_call_iterations}) reached without a final response.",
+                "user_query": initial_user_query,
+                "final_response": None,
+                "agent_steps": current_turn_messages
+            }
+            return
+        else:
+            yield {
+                "user_query": initial_user_query,
+                "final_response": final_llm_response_content,
+                "agent_steps": current_turn_messages
+            }
+            return
+
+    # Helper method for tool execution using Dict (since we reconstructed manually)
+    async def _execute_tool_call_dict(self, tool_call: Dict[str, Any]) -> Any:
+        # Simple wrapper if your original _execute_tool_call expects an object
+        # If your original handles dicts, you can just use that.
+        # This simulates a ToolCall object if needed or just passes dict
+        from collections import namedtuple
+        Function = namedtuple('Function', ['name', 'arguments'])
+        ToolCall = namedtuple('ToolCall', ['id', 'function'])
+
+        tc_obj = ToolCall(
+            id=tool_call['id'],
+            function=Function(
+                name=tool_call['function']['name'],
+                arguments=tool_call['function']['arguments']
+            )
+        )
+        return await self._execute_tool_call(tc_obj)
+
+    async def ainvoke(
+        self,
+        messages: Optional[List[Dict[str, str]]] = None,
+        config: Optional[Dict[str, Any]] = None,
+    ) -> Dict[str, Any]:
+        """
+        Invokes the Azure agent with a list of messages, handling multi-turn conversations,
+        parallel tool calls, chat history, and tool interruption.
+
+        Args:
+            messages: A list of message dictionaries (e.g., [{"role": "user", "content": "..."}]).
+                      If None, the agent attempts to resume an interrupted chat.
+            config: Optional dictionary for configurable parameters:
+                - "configurable":
+                    - "thread_id": (str) Unique ID for the conversation thread. If not provided,
+                                   chat history will not be stored or retrieved.
+                    - "history_lookback": (int) Number of previous 'agent_steps' entries to consider
+                                          for context. If None, all available history is used.
+                    - "resume_previous_chat": (bool) If True, attempts to resume the most recent
+                                              chat entry for the thread_id, updating it instead
+                                              of creating a new one.
+                    - "store_response_custom_metadata": (bool) If True, stores custom metadata
+                                              from the final LLM response in the chat history. Default is False.
+                - "tool_choice": (str) Strategy for tool selection by the LLM. Default is "auto".
+                - "tool_interrupt": (bool) If True, the agent will pause and return tool calls
+                                    for user approval/modification before execution.
+                - "tools_to_interrupt": (Optional[List[str]]) A list of tool names that should trigger
+                                        an interrupt when called. If tool_interrupt is True and this is None,
+                                        all tool calls will be interrupted. If tool_interrupt is True and this
+                                        is a list, only tool calls with names in this list will be interrupted.
+                                        If tool_interrupt is False, this parameter is ignored.
+                - "parallel_tool_calls": (bool) If True, allows the LLM to request multiple tool calls
+                                             in a single response. Default is False.
+                - "updated_tool_calls": (Union[List[Dict], Dict])
+                    - If a list, each item should be a dictionary with keys:
+                        - "id": (str) The tool_call_id of the tool to update.
+                        - "updated_arguments": (Dict) The new arguments for the tool.
+                    This is used when resuming an interrupted chat to modify tool arguments for multiple tool calls.
+                    - If a dict, it should be the argument dictionary for the first tool call only.
+                    This is typically used when parallel tool calls are disabled and only the first tool call's arguments need to be updated.
+
+        Returns:
+            Dict[str, Any]:
+                A dictionary containing the final response from the LLM, or an error message,
+                along with the agent steps for the current turn.
+                Example: {
+                    "user_query": "...",
+                    "final_response": "...",
+                    "agent_steps": [...]
+                }
+        """
+        if not self._model:
+            raise ValueError("Model not set. Please set the model before invoking the agent.")
+
+        if messages and isinstance(messages, str):
+            messages = [self.format_content_with_role(messages)]
+
+        config = config or {}
+        configurable: dict = config.get("configurable", {})
+        thread_id = configurable.get("thread_id", None)
+        history_lookback = configurable.get("history_lookback", None)
+        resume_previous_chat = configurable.get("resume_previous_chat", False)
+        store_response_custom_metadata = configurable.get("store_response_custom_metadata", False)
+
+        tool_choice = config.get("tool_choice", "auto")
+        tool_interrupt = config.get("tool_interrupt", False)
+        tools_to_interrupt: Optional[List[str]] = config.get("tools_to_interrupt", None)
+        parallel_tool_calls = config.get("parallel_tool_calls", not tool_interrupt)
+        tool_reject = config.get("tool_reject", False)
+        
+        # Log the tool interrupt configuration
+        if tool_interrupt:
+            if tools_to_interrupt:
+                tools_to_interrupt = set(tools_to_interrupt)
+                log.info(f"[Agent] Selective tool interrupt enabled for tools: {tools_to_interrupt}")
+            else:
+                log.info("[Agent] Tool interrupt enabled for ALL tools.")
+        else:
+            tools_to_interrupt = None  # Ensure it's None if interrupt is disabled
+        
+        updated_tool_calls: List[Dict[str, Any]] = config.get("updated_tool_calls", None)
+        if not updated_tool_calls:
+            updated_tool_calls = []
+        elif isinstance(updated_tool_calls, dict):
+            updated_tool_calls = [{"id": self.first_tool_id_placeholder, "updated_arguments": updated_tool_calls}]
+
+
+        max_tool_call_iterations = self._agent_config_kwargs.get("max_tool_call_iterations", 25)
+
+        current_turn_messages: List[Dict[str, Any]] = [] # Messages generated during the current user query's turn
+        conversation_history: List[Dict[str, Any]] = [] # Full chronological history for LLM context
+        if self._system_prompt:
+            # Prepend system prompt if set, ensuring it's the first message for the LLM
+            # Note: This is for the LLM's context, not stored in DB history per user request
+            conversation_history.append(self.format_content_with_role(self._system_prompt, "system"))
+
+        current_entry_id: Optional[int] = None
+        initial_user_query: Optional[str] = None
+
+        # Determine if we are storing chat (thread_id is mandatory for history and _chat_history_manager must exist)
+        store_chat = bool(thread_id and self._chat_history_manager)
+        log.debug(f"[Agent] Chat history storage enabled: {store_chat}")
+
+        most_recent_entry_id = most_recent_entry_data = None
+        if store_chat:
+            most_recent_entry_id, most_recent_entry_data = await self._chat_history_manager.get_most_recent_chat_entry(thread_id)
+
+            if most_recent_entry_data:
+                most_recent_agent_steps = most_recent_entry_data.get("agent_steps", [])
+                pending_tool_calls = most_recent_agent_steps[-1].get("tool_calls", None) if most_recent_agent_steps else None
+
+                if pending_tool_calls and messages:
+                    log.info(f"[Agent] New query received while chat {most_recent_entry_id} was interrupted. Deleting old interrupted state.")
+                    await self._chat_history_manager.delete_chat_entry(most_recent_entry_id, thread_id)
+                    most_recent_entry_id = most_recent_entry_data = None
+                    resume_previous_chat = False
+
+                elif pending_tool_calls or resume_previous_chat:
+                    resume_previous_chat = True
+                    current_entry_id = most_recent_entry_id
+                    current_turn_messages.extend(most_recent_agent_steps)
+
+                    if pending_tool_calls:
+                        log.info(f"[Agent] Resuming interrupted chat {current_entry_id} for thread '{thread_id}'.")
+
+                        # Handle tool rejection — user declined tool execution
+                        if tool_reject:
+                            log.info(f"[Agent] User REJECTED tool execution. Injecting decline messages.")
+                            for tool_call in pending_tool_calls:
+                                tool_call_name = tool_call["function"]["name"]
+                                reject_message = {
+                                    "tool_call_id": tool_call["id"],
+                                    "role": "tool",
+                                    "name": tool_call_name,
+                                    "content": json.dumps({"status": "rejected", "message": f"Tool '{tool_call_name}' execution was declined by the user. The tool was NOT executed. Do not retry this tool call."}),
+                                }
+                                current_turn_messages.append(reject_message)
+                        else:
+                            updated_tool_calls_dict = {tc["id"]: tc["updated_arguments"] for tc in updated_tool_calls}
+
+                            if len(pending_tool_calls)==1 and self.first_tool_id_placeholder in updated_tool_calls_dict:
+                                updated_tool_calls_dict[pending_tool_calls[0]["id"]] = updated_tool_calls_dict[self.first_tool_id_placeholder]
+                                log.info(f"  [Agent] Mapped placeholder ID to actual tool_call_id '{pending_tool_calls[0]['id']}', for single tool call update.")
+
+                            tool_execution_tasks = []
+                            for tool_call in pending_tool_calls:
+                                if tool_call["id"] in updated_tool_calls_dict:
+                                    # Update tool call arguments with user-provided updates
+                                    reference_args = json.loads(tool_call["function"]["arguments"])
+                                    updated_tool_calls_dict[tool_call["id"]] = self.convert_value_type_of_candidate_as_given_in_reference(
+                                                                                        reference=reference_args,
+                                                                                        candidate=updated_tool_calls_dict[tool_call["id"]]
+                                                                                    )
+                                    tool_call["function"]["arguments"] = json.dumps(updated_tool_calls_dict[tool_call["id"]])
+                                    if reference_args != updated_tool_calls_dict[tool_call["id"]]:
+                                        tool_call["function"]["original_arguments"] = reference_args
+                                    log.info(f"  [Agent] Applied user update for tool '{tool_call['function']['name']}' (ID: {tool_call['id']}).")
+
+                                tool_execution_tasks.append(self._execute_tool_call(tool_call))
+
+                            tool_outputs = await asyncio.gather(*tool_execution_tasks)
+                            for tool_output, tool_call in zip(tool_outputs, pending_tool_calls):
+                                tool_call_name = tool_call["function"]["name"]
+                                original_args = tool_call["function"].get("original_arguments", None)
+                                if original_args:
+                                    updated_args = updated_tool_calls_dict.get(tool_call["id"])
+                                    note_msg = (
+                                        f"The tool '{tool_call_name}' was originally called with arguments {original_args}. "
+                                        f"However, as part of the human-in-the-loop process, the user explicitly updated the arguments to {updated_args}. "
+                                        f"Consequently, the tool was executed using these updated arguments ({updated_args}). "
+                                        "Please proceed with the understanding that the operation was performed using the user-specified values."
+                                    )
+                                    tool_output = {"tool_response": tool_output, "Note": note_msg}
+                                tool_message = {
+                                    "tool_call_id": tool_call["id"],
+                                    "role": "tool",
+                                    "name": tool_call_name,
+                                "content": json.dumps(tool_output),
+                            }
+                            current_turn_messages.append(tool_message)
+
+                        log.info(f"[Agent] Resuming interrupted chat {most_recent_entry_id} for thread '{thread_id}' with {len(current_turn_messages)} messages.")
+
+
+        if messages:
+            current_turn_messages.extend(messages)
+
+        elif not current_turn_messages:
+            log.error("[Agent] No messages provided and no previous chat to resume.")
+            raise ValueError("Messages is None, and no previous chat to resume.")
+
+        initial_user_query = current_turn_messages[0]["content"]
+
+
+        if store_chat:
+            if resume_previous_chat and history_lookback is not None:
+                history_lookback += 1
+
+            history_entries = await self._chat_history_manager.get_recent_history(thread_id, history_lookback)
+            if resume_previous_chat and history_entries:
+                history_entries.pop()
+
+            for entry in history_entries:
+                # Add previous agent_steps to conversation history for context
+                conversation_history.extend(entry["agent_steps"])
+            log.info(f"[Agent] Loaded {len(history_entries)} previous turns for context.")
+
+
+        conversation_history.extend(current_turn_messages)
+        iteration = 0
+        final_llm_response_content: Optional[str] = None
+
+        while iteration < max_tool_call_iterations:
+            iteration += 1
+            try:
+                completion_params = {
+                    "model": self._model,
+                    "messages": conversation_history,
+                    "temperature": self._temperature
+                }
+
+                if self._tools_json_schema:
+                    completion_params["tools"] = self._tools_json_schema
+                    completion_params["tool_choice"] = tool_choice
+                    completion_params["parallel_tool_calls"] = parallel_tool_calls
+
+                log.info(f"\n[Agent] Iteration {iteration}: Calling LLM with {len(conversation_history)} messages...")
+                
+                # Get agent context and add as extra headers for LiteLLM tracking
+                from src.models.guardrail_aware_llm import _ctx_from_session
+                agent_ctx = _ctx_from_session()
+                extra_headers = {}
+                if agent_ctx.get('agent_id'):
+                    extra_headers['x-agent-id'] = agent_ctx['agent_id']
+                if agent_ctx.get('agent_name'):
+                    extra_headers['x-agent-name'] = agent_ctx['agent_name']
+                if agent_ctx.get('session_id'):
+                    extra_headers['x-session-id'] = agent_ctx['session_id']
+                if agent_ctx.get('user_id'):
+                    extra_headers['x-user-id'] = agent_ctx['user_id']
+                
+                # Merge instance-level extra headers (e.g. gateway auth token)
+                if self._extra_headers:
+                    extra_headers.update(self._extra_headers)
+
+                if extra_headers:
+                    completion_params['extra_headers'] = extra_headers
+                
+                response = await asyncio.to_thread(self._client.chat.completions.create, **completion_params)
+                response_message: ChatCompletionMessage = response.choices[0].message
+
+                # Trigger post-completion hooks for token logging
+                await self._trigger_post_completion_hooks(response, agent_ctx)
+
+                # Add LLM's message to current turn and full history
+                current_turn_messages.append(response_message.model_dump(exclude_unset=True))
+                conversation_history.append(response_message.model_dump(exclude_unset=True))
+
+                if store_response_custom_metadata and response_message.content:
+                    parsed_response = await self._json_output_parser(response_message.content)
+                    if isinstance(parsed_response, dict) and "error" not in parsed_response:
+                        current_turn_messages[-1]["response_custom_metadata"] = parsed_response
+
+                if response_message.tool_calls:
+                    log.info(f"[Agent] LLM requested {len(response_message.tool_calls)} tool call(s).")
+
+                    # --- Tool Interrupt Logic ---
+                    # Determine if we should interrupt based on selective tool interrupt logic
+                    should_interrupt = False
+                    if tool_interrupt:
+                        if tools_to_interrupt is None:
+                            # If tools_to_interrupt is None, interrupt all tool calls
+                            should_interrupt = True
+                            log.debug("[Agent] tools_to_interrupt is None, will interrupt all tool calls.")
+                        else:
+                            # Check if any of the requested tool calls are in the tools_to_interrupt list
+                            requested_tool_names = [tc.function.name for tc in response_message.tool_calls]
+                            matching_tools = [name for name in requested_tool_names if name in tools_to_interrupt]
+                            if matching_tools:
+                                should_interrupt = True
+                                log.info(f"[Agent] Selective interrupt triggered. Matching tools: {matching_tools}")
+                            else:
+                                log.info(f"[Agent] No tools in interrupt list. Requested tools: {requested_tool_names}, Interrupt list: {tools_to_interrupt}. Proceeding without interrupt.")
+
+                    if should_interrupt:
+                        log.info("[Agent] Tool interrupt flag is ON. Interrupting for user approval.")
+                        if store_chat:
+                            if current_entry_id:
+                                await self._chat_history_manager.update_chat_entry(
+                                    entry_id=current_entry_id,
+                                    thread_id=thread_id,
+                                    agent_steps=current_turn_messages,
+                                    final_response=None # Still interrupted
+                                )
+                            else:
+                                current_entry_id = await self._chat_history_manager.add_chat_entry(
+                                    thread_id=thread_id,
+                                    user_query=initial_user_query,
+                                    agent_steps=current_turn_messages,
+                                    final_response=None # Mark as potentially interrupted or ongoing
+                                )
+                        return {
+                            "user_query": initial_user_query,
+                            "final_response": None,
+                            "agent_steps": current_turn_messages
+                        }
+
+                    # --- Tool Execution Logic (if not interrupted or if resuming) ---
+                    tool_calls_for_execution: List[ChatCompletionMessageToolCall] = response_message.tool_calls
+
+                    # Execute all requested tool calls in parallel
+                    tool_execution_tasks = [
+                        self._execute_tool_call(tool_call)
+                        for tool_call in tool_calls_for_execution
+                    ]
+                    tool_results = await asyncio.gather(*tool_execution_tasks)
+
+                    # Add the outputs of the tool calls back to the conversation history
+                    for i, tool_call in enumerate(tool_calls_for_execution):
+                        tool_output = tool_results[i]
+                        tool_message = {
+                            "tool_call_id": tool_call.id,
+                            "role": "tool",
+                            "name": tool_call.function.name,
+                            "content": json.dumps(tool_output),
+                        }
+                        current_turn_messages.append(tool_message)
+                        conversation_history.append(tool_message)
+                    log.info(f"[Agent] Added {len(tool_results)} tool output(s) to history. Re-querying LLM.")
+
+                else:
+                    # The LLM provided a final text response (no more tool calls requested)
+                    log.info("[Agent] LLM provided a final text response.")
+                    final_llm_response_content = response_message.content
+                    break # Exit the loop, we have a final response
+
+            except Exception as e:
+                if is_guardrail_exception(e):
+                    log.warning(f"[Agent] Guardrail/content-policy violation during ainvoke: {e}")
+                else:
+                    log.error(f"[Agent] An error occurred during ainvoke: {e}", exc_info=True)
+                return {
+                    "error": f"LLM interaction error: {e}",
+                    "user_query": initial_user_query,
+                    "final_response": None,
+                    "agent_steps": current_turn_messages
+                }
+
+        # After loop, update DB if chat_saver is active and an entry was created/updated
+        if store_chat:
+            if current_entry_id:
+                await self._chat_history_manager.update_chat_entry(
+                    entry_id=current_entry_id,
+                    thread_id=thread_id,
+                    agent_steps=current_turn_messages,
+                    final_response=final_llm_response_content
+                )
+            else:
+                await self._chat_history_manager.add_chat_entry(
+                    thread_id=thread_id,
+                    user_query=initial_user_query,
+                    agent_steps=current_turn_messages,
+                    final_response=final_llm_response_content
+                )
+
+
+        if final_llm_response_content is None:
+            return {
+                "error": f"Max tool call iterations ({max_tool_call_iterations}) reached without a final response.",
+                "user_query": initial_user_query,
+                "final_response": None,
+                "agent_steps": current_turn_messages
+            }
+        else:
+            return {
+                "user_query": initial_user_query,
+                "final_response": final_llm_response_content,
+                "agent_steps": current_turn_messages
+            }

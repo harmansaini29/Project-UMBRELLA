@@ -1,0 +1,124 @@
+site_name: Agentic Foundry
+theme:
+    name: material
+    logo: images/logo.png
+    features:
+    - content.code.copy
+    - navigation.path
+markdown_extensions:
+- admonition
+- pymdownx.details
+- pymdownx.superfences
+- attr_list
+- md_in_html
+- def_list
+- pymdownx.tabbed:
+    alternate_style: true
+- pymdownx.emoji:
+    emoji_index: !!python/name:material.extensions.emoji.twemoji
+    emoji_generator: !!python/name:material.extensions.emoji.to_svg
+    
+extra_css:
+    - css/hide-footer.css
+
+# plugins:
+#     - search
+#     - mermaid2
+
+
+nav:
+  - Introduction: index.md
+  - Definitions:
+     - Vocabulary - Definitions: Definitions/Vocabulary_Definitions.md
+     - Human in the loop: Definitions/hitl.md
+  - Features: Features.md
+  - Core Building Blocks: core_building_blocks.md
+  - Architecture: Architecture.md
+  - Installation: 
+     - Windows: Installation/windows.md
+     - Linux: Installation/linux.md
+     - Azure Kubernetes Service: Installation/Azure.md
+     - Google Kubernetes Engine: Installation/GCP.md
+     - AWS Kubernetes Engine: Installation/AWS.md
+     - Database setup: Installation/Database_Setup.md
+     - VM installation using docker-compose: Installation/VM_Docker-Compose.md
+     - Autoscaling Deployment:
+         - AKS Autoscaling: Installation/Autoscaling_Deployment/AKS_Autoscaling.md
+         - VM Autoscaling using Docker: Installation/Autoscaling_Deployment/VM_Autoscaling.md
+     - Multi-Cloud CI/CD Pipeline: 
+         - MultiCloud Backend: Installation/Multicloud_CICD_deployment/MultiCloudBackend.md
+         - MultiCloud Frontend: Installation/Multicloud_CICD_deployment/MultiCloudFrontend.md
+     - Linux vm CI/CD Pipeline: Installation/linux_vm_CICD.md
+  - Enabling Additional LLM Models: custom_llm_models.md
+  - Load Balancing & Fallback Models: Load_Balancing_Fallback.md
+  - Model Server Integration: Model_server.md
+  - Agents Design: 
+     - Overview: Agents_Design/overview.md
+     - React Agent Design: Agents_Design/React Agent Design.md
+     - React Critic Agent Design: Agents_Design/ReactCriticAgent_Design.md
+     - Multi Agent Design: Agents_Design/Multi Agent Design.md
+     - Planner Executor Agent Design: Agents_Design/Planner_executor_agent_design.md
+     - Orchestration Meta Agent Design: Agents_Design/Orchestration_Meta_Agent_Design.md
+     - Planner Meta Agent Design: Agents_Design/Planner_meta_agent_design.md
+     - Hybrid Agent Design: Agents_Design/Hybrid_Agent_Design.md
+  - Agent OS & Skill Agent Framework: Agent_OS_&_Skill_Agent.md
+  - Admin Screen: Admin_Screen.md
+  - Time-To-Live: Time-To-Live.md
+  - Super Admin: SuperAdmin.md
+  - Role Base Access Control: RBAC.md
+  - API Authentication: JWT.md
+  - Keycloak SSO: Keycloak_SSO.md
+  - Microsoft Authentication (MSAL SSO): MSAL_SSO.md
+  - Vault: Vault.md
+  - Tools:
+    - Tools Configuration : tools_config/tools.md
+    - Tool Creation via Chat Inference: tools_config/tool_creation.md
+    - Tool Validation: Tool_Validation.md
+    - Tool Interrupt: Tool_Interrupt.md
+    - Tool Versioning: tools_config/tool_versioning.md
+  - Files: files_upload/files.md
+  - DataConnectors: DataConnectors.md
+  - Knowledge Base: Knowledge_Base.md
+  - MCP Registry: MCP_Registry.md
+  - Agent Workflows: Agent_Workflows.md
+  - Agent Configuration:
+      - Overview: agent_config/Overview.md
+      - React Agent Configuration: agent_config/reactAgent.md
+      - React Critic Agent Configuration: agent_config/reactCritic.md
+      - Multi Agent Configuration: agent_config/multiAgent.md
+      - Planner Executor Agent Configuration: agent_config/PlannerExecutor.md
+      - Meta Agent Configuration: agent_config/metaAgent.md
+      - Planner Meta Agent Configuration: agent_config/PlannerMeta.md
+      - Hybrid Agent Configuration: agent_config/HybridAgent.md
+  - Memory Management: memory_management.md
+  - Google ADK Framework Support: Google_ADK_Framework_Support.md
+  - Inference:
+      - Overview: Inference/inference.md
+      - React Agent Inference: Inference/reactAgent_inference.md
+      - React Critic Agent Inference: Inference/ReactCriticAgent_inference.md
+      - Multi Agent Inference: Inference/multiAgent_inference.md
+      - Planner Executor Agent Inference: Inference/PlannerExecutorAgent_inference.md
+      - Meta Agent Inference: Inference/metaAgent_inference.md
+      - Planner Meta Agent Inference: Inference/MetaPlanner_inference.md
+      - Hybrid Agent Inference: Inference/HybridAgent_inference.md
+      - Canvas Screen: Inference/Canvas_Screen.md
+  - Serever Sent Events: SSE.md
+  - Kafka Message Queue: Kafka_Message_Queue.md
+  - Cron Scheduler: Cron_scheduler_functionality.md
+  - Prompt Optimization: prompt_optimization.md
+  - Evaluation: 
+      - Evaluation Metrics: Evaluation/evaluation_metrics.md
+      - Groundtruth Evaluation: Evaluation/Groundtruth_Evaluation.md
+      - Consistency Evaluation: Evaluation/Consistency.md
+  - Telemetry:
+      - Open Telemetry: Telemetry/telemetry.md
+      - Connecting to Grafana: Telemetry/Connecting_to_Grafana.md
+      - Arize Phoenix: Telemetry/Arize_Phoenix.md
+      - Azure Monitoring: Telemetry/Azure_Monitoring.md
+  - Model Cost and Token Tracking: Cost_Token_Tracking.md
+  - LLM Call Tracing: LLM_Call_Tracing.md
+  - Tool and MCP Export Import: Tool_and_MCP_Export_Import.md
+  - Export Agent: ExportAgent.md
+  - GZIP Compression: GZIP_Compression.md
+  - RAI Guardrails: RAI_Guardrails.md
+  - Prebuilt Components Auto-Onboarding: onboarding.md

@@ -1,0 +1,1095 @@
+from enum import Enum
+import re
+from typing import Optional, List, Dict
+from pydantic import BaseModel, Field, field_validator, Field
+from datetime import datetime
+import base64
+
+
+class UserRole(str, Enum):
+    USER = "User"
+    DEVELOPER = "Developer"
+    ADMIN = "Admin"
+    SUPER_ADMIN = "SuperAdmin"
+
+
+class UserStatus(str, Enum):
+    ACTIVE = "active"
+    INACTIVE = "inactive"
+    PENDING_APPROVAL = "pending_approval"
+
+
+class Permission(str, Enum):
+    # Tool permissions
+    READ_TOOLS = "read_tools"
+    CREATE_TOOLS = "create_tools"
+    UPDATE_TOOLS = "update_tools"
+    DELETE_TOOLS = "delete_tools"
+    EXECUTE_TOOLS = "execute_tools"
+    
+    # Agent permissions
+    READ_AGENTS = "read_agents"
+    CREATE_AGENTS = "create_agents"
+    UPDATE_AGENTS = "update_agents"
+    DELETE_AGENTS = "delete_agents"
+    EXECUTE_AGENTS = "execute_agents"
+    
+    # Workflow permissions
+    READ_WORKFLOWS = "read_workflows"
+    CREATE_WORKFLOWS = "create_workflows"
+    UPDATE_WORKFLOWS = "update_workflows"
+    DELETE_WORKFLOWS = "delete_workflows"
+    EXECUTE_WORKFLOWS = "execute_workflows"
+    
+    # User management permissions
+    MANAGE_USERS = "manage_users"
+    VIEW_ALL_USERS = "view_all_users"
+    
+    # Approval permissions
+    APPROVE_AGENTS = "approve_agents"
+    APPROVE_TOOLS = "approve_tools"
+    GRANT_APPROVAL_PERMISSIONS = "grant_approval_permissions"
+    
+    # System permissions
+    SYSTEM_ADMIN = "system_admin"
+    VIEW_AUDIT_LOGS = "view_audit_logs"
+
+
+# Role-based permission mapping
+ROLE_PERMISSIONS = {
+    UserRole.USER: [
+        # Users can read and execute workflows for testing
+        Permission.READ_WORKFLOWS,
+        Permission.EXECUTE_WORKFLOWS,
+        Permission.READ_AGENTS,
+        Permission.EXECUTE_AGENTS,
+    ],
+    UserRole.DEVELOPER: [
+        Permission.READ_TOOLS,
+        Permission.CREATE_TOOLS,
+        Permission.UPDATE_TOOLS,
+        Permission.EXECUTE_TOOLS,
+        Permission.DELETE_TOOLS,
+        Permission.READ_AGENTS,
+        Permission.CREATE_AGENTS,
+        Permission.UPDATE_AGENTS,
+        Permission.EXECUTE_AGENTS,
+        Permission.DELETE_AGENTS,
+        Permission.READ_WORKFLOWS,
+        Permission.CREATE_WORKFLOWS,
+        Permission.UPDATE_WORKFLOWS,
+        Permission.DELETE_WORKFLOWS,
+        Permission.EXECUTE_WORKFLOWS
+    ],
+    UserRole.ADMIN: [
+        Permission.READ_TOOLS,
+        Permission.CREATE_TOOLS,
+        Permission.UPDATE_TOOLS,
+        Permission.DELETE_TOOLS,
+        Permission.EXECUTE_TOOLS,
+        Permission.READ_AGENTS,
+        Permission.CREATE_AGENTS,
+        Permission.UPDATE_AGENTS,
+        Permission.DELETE_AGENTS,
+        Permission.EXECUTE_AGENTS,
+        Permission.READ_WORKFLOWS,
+        Permission.CREATE_WORKFLOWS,
+        Permission.UPDATE_WORKFLOWS,
+        Permission.DELETE_WORKFLOWS,
+        Permission.EXECUTE_WORKFLOWS,
+        Permission.MANAGE_USERS,
+        Permission.VIEW_ALL_USERS,
+        Permission.VIEW_AUDIT_LOGS,
+    ],
+    UserRole.SUPER_ADMIN: [
+        # Super Admin has all permissions
+        Permission.READ_TOOLS,
+        Permission.CREATE_TOOLS,
+        Permission.UPDATE_TOOLS,
+        Permission.DELETE_TOOLS,
+        Permission.EXECUTE_TOOLS,
+        Permission.READ_AGENTS,
+        Permission.CREATE_AGENTS,
+        Permission.UPDATE_AGENTS,
+        Permission.DELETE_AGENTS,
+        Permission.EXECUTE_AGENTS,
+        Permission.READ_WORKFLOWS,
+        Permission.CREATE_WORKFLOWS,
+        Permission.UPDATE_WORKFLOWS,
+        Permission.DELETE_WORKFLOWS,
+        Permission.EXECUTE_WORKFLOWS,
+        Permission.MANAGE_USERS,
+        Permission.VIEW_ALL_USERS,
+        Permission.APPROVE_AGENTS,
+        Permission.APPROVE_TOOLS,
+        Permission.GRANT_APPROVAL_PERMISSIONS,
+        Permission.SYSTEM_ADMIN,
+        Permission.VIEW_AUDIT_LOGS,
+    ]
+}
+
+
+class User(BaseModel):
+    id: str
+    email: str
+    username: str
+    role: str
+    status: UserStatus
+    created_at: datetime
+    updated_at: datetime
+    last_login: Optional[datetime] = None
+    approved_by: Optional[str] = None
+    approved_at: Optional[datetime] = None
+    department_name: Optional[str] = None
+
+
+class ApprovalPermission(BaseModel):
+    id: str
+    admin_user_id: str
+    granted_by: str  # Super Admin who granted the permission
+    permission_type: str  # 'agent_approval' or 'tool_approval'
+    granted_at: datetime
+    is_active: bool = True
+
+
+class AuditLog(BaseModel):
+    id: str
+    user_id: str
+    action: str
+    resource_type: str  # 'user', 'agent', 'tool', 'approval_permission'
+    resource_id: Optional[str] = None
+    old_value: Optional[str] = None
+    new_value: Optional[str] = None
+    timestamp: datetime
+    ip_address: Optional[str] = None
+    user_agent: Optional[str] = None
+
+
+# Request/Response Models
+class LoginRequest(BaseModel):
+    email_id: str
+    password: str
+    department_name: Optional[str] = None
+
+    @field_validator('password')
+    @classmethod
+    def decode_password(cls, v: str) -> str:
+        try:
+            v = base64.b64decode(v).decode('utf-8')
+        except Exception:
+            raise ValueError('Password must be base64 encoded')
+        return v
+
+
+class LoginResponse(BaseModel):
+    approval: bool
+    token: Optional[str] = None  # JWT token
+    refresh_token: Optional[str] = None  # Long-lived refresh token
+    role: Optional[str] = None
+    username: Optional[str] = None
+    email: Optional[str] = None
+    department_name: Optional[str] = None  # Added department field
+    must_change_password: bool = Field(default=False, description="Flag indicating user must change password")
+    available_departments: Optional[List['UserDepartmentInfo']] = None  # List of all departments user has access to (for multi-department users)
+    requires_department_selection: bool = Field(default=False, description="True if user has multiple departments and needs to choose one")
+    available_roles: Optional[List[str]] = None  # All roles user has in the logged-in department
+    requires_role_selection: bool = Field(default=False, description="True if user has multiple roles in the department and needs to choose one")
+    message: str
+
+
+class RefreshTokenRequest(BaseModel):
+    """Request payload for refreshing access token.
+
+    If refresh_token is not provided in body, the API will attempt to read it from the
+    HttpOnly cookie named 'refresh_token'. This keeps backward compatibility with existing
+    login response schema while enabling refresh flow.
+    """
+    refresh_token: Optional[str] = None
+
+
+class RefreshTokenResponse(BaseModel):
+    """Response returned when a refresh token is used to obtain a new access token."""
+    approval: bool
+    token: Optional[str] = None  # New access JWT
+    refresh_token: Optional[str] = None  # Rotated refresh token (if rotation enabled)
+    message: str
+    # (Intentionally NOT returning a new refresh token field in JSON to avoid breaking clients.)
+
+
+class RegisterRequest(BaseModel):
+    email_id: str
+    password: str
+    user_name: str
+    department_names: List[str] = Field(..., min_length=1, description="List of department names the user wants to join")
+    
+    @field_validator('email_id')
+    @classmethod
+    def validate_email(cls, v: str) -> str:
+        v = v.strip()
+        if not re.match(r'^[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}$', v):
+            raise ValueError('Invalid email format. Please provide a valid email address (e.g. user@example.com)')
+        return v
+
+    @field_validator('password')
+    @classmethod
+    def validate_password(cls, v: str) -> str:
+        try:
+            v = base64.b64decode(v).decode('utf-8')
+        except Exception:
+            raise ValueError('Password must be base64 encoded')
+        if len(v) < 8:
+            raise ValueError('Password must be at least 8 characters long')
+        if not re.search(r'[A-Z]', v):
+            raise ValueError('Password must contain at least one uppercase letter')
+        if not re.search(r'[a-z]', v):
+            raise ValueError('Password must contain at least one lowercase letter')
+        if not re.search(r'[0-9]', v):
+            raise ValueError('Password must contain at least one digit')
+        if not re.search(r'[!@#$%^&*(),.?":{}|<>_\-+=\[\]\\/~`]', v):
+            raise ValueError('Password must contain at least one special character')
+        return v
+
+    @field_validator('user_name')
+    @classmethod
+    def validate_username(cls, v: str) -> str:
+        if not re.match(r'^[a-zA-Z0-9 ]+$', v):
+            raise ValueError('Username must contain only alphanumeric characters and spaces')
+        return v.strip()
+
+    @field_validator('department_names')
+    @classmethod
+    def validate_department_names(cls, v: List[str]) -> List[str]:
+        cleaned = list(set(d.strip() for d in v if d.strip()))
+        if not cleaned:
+            raise ValueError('At least one department name is required')
+        return cleaned
+
+
+class SuperAdminRegisterRequest(BaseModel):
+    email_id: str
+    password: str
+    user_name: str
+
+    @field_validator('email_id')
+    @classmethod
+    def validate_email(cls, v: str) -> str:
+        v = v.strip()
+        if not re.match(r'^[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}$', v):
+            raise ValueError('Invalid email format. Please provide a valid email address (e.g. user@example.com)')
+        return v
+
+    @field_validator('password')
+    @classmethod
+    def validate_password(cls, v: str) -> str:
+        try:
+            v = base64.b64decode(v).decode('utf-8')
+        except Exception:
+            raise ValueError('Password must be base64 encoded')
+        if len(v) < 8:
+            raise ValueError('Password must be at least 8 characters long')
+        if not re.search(r'[A-Z]', v):
+            raise ValueError('Password must contain at least one uppercase letter')
+        if not re.search(r'[a-z]', v):
+            raise ValueError('Password must contain at least one lowercase letter')
+        if not re.search(r'[0-9]', v):
+            raise ValueError('Password must contain at least one digit')
+        if not re.search(r'[!@#$%^&*(),.?":{}|<>_\-+=\[\]\\/~`]', v):
+            raise ValueError('Password must contain at least one special character')
+        return v
+
+    @field_validator('user_name')
+    @classmethod
+    def validate_username(cls, v: str) -> str:
+        if not re.match(r'^[a-zA-Z0-9 ]+$', v):
+            raise ValueError('Username must contain only alphanumeric characters and spaces')
+        return v.strip()
+
+
+class RegisterResponse(BaseModel):
+    approval: bool
+    message: str
+    pending_departments: Optional[List[str]] = None
+
+
+class DepartmentAccessRequest(BaseModel):
+    """Request to join additional departments (used by logged-in users)"""
+    department_names: List[str] = Field(..., min_length=1, description="List of department names the user wants to join")
+
+    @field_validator('department_names')
+    @classmethod
+    def validate_department_names(cls, v: List[str]) -> List[str]:
+        cleaned = list(set(d.strip() for d in v if d.strip()))
+        if not cleaned:
+            raise ValueError('At least one department name is required')
+        return cleaned
+
+
+class AssignRoleDepartmentRequest(BaseModel):
+    email_id: str
+    department_name: str
+    role: str
+
+
+class AssignRoleDepartmentResponse(BaseModel):
+    success: bool
+    message: str
+
+
+class RemoveRoleDepartmentRequest(BaseModel):
+    email_id: str
+    department_name: str
+    role: str
+
+
+class RemoveRoleDepartmentResponse(BaseModel):
+    success: bool
+    message: str
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# REGISTRATION APPROVAL MODELS
+# ─────────────────────────────────────────────────────────────────────────────
+
+class RegistrationApproveRequest(BaseModel):
+    """Request for admin to approve one or more registration requests by assigning a single role"""
+    request_ids: List[int] = Field(..., description="List of registration request IDs to approve")
+    role: str = Field(..., description="Role to assign to all the users in their department")
+    department_name: Optional[str] = Field(None, description="Optional: Override department name for the users. If not provided, uses the department from registration request.")
+
+
+class RegistrationRejectRequest(BaseModel):
+    """Request for admin to reject one or more registration requests"""
+    request_ids: List[int] = Field(..., description="List of registration request IDs to reject")
+    rejection_reason: Optional[str] = Field(None, description="Reason for rejection")
+
+
+class RegistrationRequestResponse(BaseModel):
+    """Response model for a single registration request"""
+    id: int
+    email_id: str
+    user_name: str
+    department_name: str
+    status: str
+    assigned_role: Optional[str] = None
+    reviewed_by: Optional[str] = None
+    reviewed_at: Optional[datetime] = None
+    rejection_reason: Optional[str] = None
+    created_at: Optional[datetime] = None
+    is_sso: bool = False
+
+
+class GrantApprovalPermissionRequest(BaseModel):
+    admin_user_id: str
+    permission_type: str  # 'agent_approval' or 'tool_approval'
+
+
+class RevokeApprovalPermissionRequest(BaseModel):
+    admin_user_id: str
+    permission_type: str
+
+
+class ApprovalPermissionResponse(BaseModel):
+    success: bool
+    message: str
+    approval_permission: Optional[ApprovalPermission] = None
+
+
+class UpdatePasswordRequest(BaseModel):
+    email_id: str
+    new_password: Optional[str] = Field(None, description="New password for the user")
+    role: Optional[str] = None
+    department_name: Optional[str] = None
+
+    @field_validator('email_id')
+    @classmethod
+    def validate_email(cls, v: str) -> str:
+        v = v.strip()
+        if not re.match(r'^[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}$', v):
+            raise ValueError('Invalid email format. Please provide a valid email address (e.g. user@example.com)')
+        return v
+
+    @field_validator('new_password')
+    @classmethod
+    def validate_new_password(cls, v: Optional[str]) -> Optional[str]:
+        if v is None:
+            return v
+        try:
+            v = base64.b64decode(v).decode('utf-8')
+        except Exception:
+            raise ValueError('Password must be base64 encoded')
+        if len(v) < 8:
+            raise ValueError('Password must be at least 8 characters long')
+        if not re.search(r'[A-Z]', v):
+            raise ValueError('Password must contain at least one uppercase letter')
+        if not re.search(r'[a-z]', v):
+            raise ValueError('Password must contain at least one lowercase letter')
+        if not re.search(r'[0-9]', v):
+            raise ValueError('Password must contain at least one digit')
+        if not re.search(r'[!@#$%^&*(),.?":{}|<>_\-+=\[\]\\/~`]', v):
+            raise ValueError('Password must contain at least one special character')
+        return v
+    
+
+class UpdateUserRoleRequest(BaseModel):
+    email_id: str = Field(..., description="Target user's email (mail_id)")
+    add_roles: Optional[List[str]] = Field(None, description="List of roles to assign to the user within the department")
+    remove_roles: Optional[List[str]] = Field(None, description="List of roles to remove from the user within the department")
+    department_name: Optional[str] = Field(None, description="Department to update roles in. Required for SuperAdmin, optional for Admin (defaults to admin's department).")
+    temporary_password: Optional[str] = Field(None, description="Temporary password to set for the user. User will be required to change on next login.")
+
+    @field_validator('email_id')
+    @classmethod
+    def validate_email(cls, v: str) -> str:
+        v = v.strip()
+        if not re.match(r'^[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}$', v):
+            raise ValueError('Invalid email format. Please provide a valid email address (e.g. user@example.com)')
+        return v
+
+    @field_validator('add_roles', 'remove_roles')
+    @classmethod
+    def validate_role_lists(cls, v: Optional[List[str]]) -> Optional[List[str]]:
+        if v is None:
+            return v
+        cleaned = [r.strip() for r in v if r and r.strip()]
+        return cleaned or None
+
+    @field_validator('temporary_password')
+    @classmethod
+    def validate_temporary_password(cls, v: Optional[str]) -> Optional[str]:
+        if v is None:
+            return v
+        try:
+            v = base64.b64decode(v).decode('utf-8')
+        except Exception:
+            raise ValueError('Password must be base64 encoded')
+        if len(v) < 8:
+            raise ValueError('Password must be at least 8 characters long')
+        if not re.search(r'[A-Z]', v):
+            raise ValueError('Password must contain at least one uppercase letter')
+        if not re.search(r'[a-z]', v):
+            raise ValueError('Password must contain at least one lowercase letter')
+        if not re.search(r'[0-9]', v):
+            raise ValueError('Password must contain at least one digit')
+        if not re.search(r'[!@#$%^&*(),.?":{}|<>_\-+=\[\]\\/~`]', v):
+            raise ValueError('Password must contain at least one special character')
+        return v
+
+
+# User Enable/Disable Models
+class SetUserActiveStatusRequest(BaseModel):
+    """Request to enable or disable a user's login access in a specific department"""
+    email_id: str = Field(..., description="Target user's email (mail_id)")
+    is_active: bool = Field(..., description="Whether the user should be active (True) or disabled (False)")
+    department_name: str = Field(..., description="Department to enable/disable user in")
+
+
+class UserActiveStatusResponse(BaseModel):
+    """Response for user enable/disable operations"""
+    success: bool
+    message: str
+    email: str
+    is_active: bool
+    department_name: str = Field(..., description="Department affected")
+
+
+# Role-based Access Control Models
+class RoleModel(BaseModel):
+    role_name: str
+    created_at: datetime
+    created_by: Optional[str] = None
+
+
+class AccessPermission(BaseModel):
+    """Permission structure for tools, agents, mcp_servers and workflows"""
+    tools: bool = False
+    agents: bool = False
+    mcp_servers: bool = False
+    workflows: bool = False
+
+
+class RoleAccessModel(BaseModel):
+    department_name: str
+    role_name: str
+    read_access: AccessPermission
+    add_access: AccessPermission
+    update_access: AccessPermission
+    delete_access: AccessPermission
+    execute_access: AccessPermission
+    execution_steps_access: Optional[bool] = None
+    tool_verifier_flag_access: Optional[bool] = None
+    plan_verifier_flag_access: Optional[bool] = None
+    online_evaluation_flag_access: Optional[bool] = None
+    evaluation_access: Optional[bool] = None
+    vault_access: Optional[bool] = None
+    data_connector_access: Optional[bool] = None
+    knowledgebase_access: Optional[bool] = None
+    validator_access: Optional[bool] = None
+    file_context_access: Optional[bool] = None
+    canvas_view_access: Optional[bool] = None
+    context_access: Optional[bool] = None
+    export_agents_access: Optional[bool] = None
+    export_tools_access: Optional[bool] = None
+    export_servers_access: Optional[bool] = None
+    convert_to_mcp_access: Optional[bool] = None
+    import_tools_access: Optional[bool] = None
+    import_servers_access: Optional[bool] = None
+    import_agents_access: Optional[bool] = None
+    created_at: datetime
+    updated_at: datetime
+    created_by: Optional[str] = None
+
+
+# Request Models
+class AddRoleRequest(BaseModel):
+    department_name: str
+    role_name: str
+
+
+class SetRolePermissionsRequest(BaseModel):
+    department_name: str
+    role_name: str
+    read_access: AccessPermission = AccessPermission()
+    add_access: AccessPermission = AccessPermission()
+    update_access: AccessPermission = AccessPermission()
+    delete_access: AccessPermission = AccessPermission()
+    execute_access: AccessPermission = AccessPermission()
+    execution_steps_access: Optional[bool] = None
+    tool_verifier_flag_access: Optional[bool] = None
+    plan_verifier_flag_access: Optional[bool] = None
+    online_evaluation_flag_access: Optional[bool] = None
+    evaluation_access: Optional[bool] = None
+    vault_access: Optional[bool] = None
+    data_connector_access: Optional[bool] = None
+    knowledgebase_access: Optional[bool] = None
+    validator_access: Optional[bool] = None
+    file_context_access: Optional[bool] = None
+    canvas_view_access: Optional[bool] = None
+    context_access: Optional[bool] = None
+    export_agents_access: Optional[bool] = None
+    export_tools_access: Optional[bool] = None
+    export_servers_access: Optional[bool] = None
+    convert_to_mcp_access: Optional[bool] = None
+    import_tools_access: Optional[bool] = None
+    import_servers_access: Optional[bool] = None
+    import_agents_access: Optional[bool] = None
+
+
+class UpdateRolePermissionsRequest(BaseModel):
+    department_name: str
+    role_name: str
+    read_access: Optional[AccessPermission] = None
+    add_access: Optional[AccessPermission] = None
+    update_access: Optional[AccessPermission] = None
+    delete_access: Optional[AccessPermission] = None
+    execute_access: Optional[AccessPermission] = None
+    execution_steps_access: Optional[bool] = None
+    tool_verifier_flag_access: Optional[bool] = None
+    plan_verifier_flag_access: Optional[bool] = None
+    online_evaluation_flag_access: Optional[bool] = None
+    evaluation_access: Optional[bool] = None
+    vault_access: Optional[bool] = None
+    data_connector_access: Optional[bool] = None
+    knowledgebase_access: Optional[bool] = None
+    validator_access: Optional[bool] = None
+    file_context_access: Optional[bool] = None
+    canvas_view_access: Optional[bool] = None
+    context_access: Optional[bool] = None
+    export_agents_access: Optional[bool] = None
+    export_tools_access: Optional[bool] = None
+    export_servers_access: Optional[bool] = None
+    convert_to_mcp_access: Optional[bool] = None
+    import_tools_access: Optional[bool] = None
+    import_servers_access: Optional[bool] = None
+    import_agents_access: Optional[bool] = None
+
+
+class GetRolePermissionsRequest(BaseModel):
+    department_name: str
+    role_name: str
+
+
+class DeleteRoleRequest(BaseModel):
+    department_name: str
+    role_name: str
+
+
+# Response Models
+class RoleResponse(BaseModel):
+    success: bool
+    message: str
+    role: Optional[RoleModel] = None
+
+
+class RoleListResponse(BaseModel):
+    success: bool
+    message: str
+    roles: List[RoleModel] = []
+
+
+class RolePermissionsResponse(BaseModel):
+    success: bool
+    message: str
+    permissions: Optional[RoleAccessModel] = None
+
+
+class AllRolePermissionsResponse(BaseModel):
+    success: bool
+    message: str
+    role_permissions: List[RoleAccessModel] = []
+
+
+# Department Models
+class DepartmentModel(BaseModel):
+    department_name: str
+    admins: Optional[List[str]] = []
+    created_at: datetime
+    created_by: Optional[str] = None
+
+
+# Department Request Models
+class AddDepartmentRequest(BaseModel):
+    department_name: str = Field(..., min_length=1, max_length=50, description="Name of the department")
+
+class AddAdminsToDepartmentRequest(BaseModel):
+    admin_emails: List[str] = Field(..., description="List of admin email addresses to add")
+
+class RemoveAdminFromDepartmentRequest(BaseModel):
+    admin_email: str = Field(..., description="Email address of the admin to remove")
+
+
+# Department Response Models
+class DepartmentResponse(BaseModel):
+    success: bool
+    message: str
+    department: Optional[DepartmentModel] = None
+
+
+class DepartmentListResponse(BaseModel):
+    success: bool
+    message: str
+    departments: List[DepartmentModel] = []
+
+class AddRoleToDepartmentRequest(BaseModel):
+    role_name: str = Field(..., min_length=1, max_length=50, description="Name of the role to add to department")
+
+class RemoveRoleFromDepartmentRequest(BaseModel):
+    role_name: str = Field(..., description="Name of the role to remove from department")
+
+class DepartmentRoleResponse(BaseModel):
+    success: bool
+    message: str
+    roles: List[str] = []
+
+
+class DepartmentUserInfo(BaseModel):
+    """Response model for user info in department"""
+    email: str
+    user_name: Optional[str] = None
+    role: str
+    is_active: bool = Field(default=True, description="Whether user is active in this department")
+
+
+class DepartmentUsersResponse(BaseModel):
+    """Response model for listing users in department"""
+    department_name: str
+    total_count: int
+    users: List[DepartmentUserInfo]
+
+
+class DepartmentUsersInfo(BaseModel):
+    """Response model for users in a single department (used in all departments response)"""
+    department_name: str
+    user_count: int
+    users: List[DepartmentUserInfo]
+
+
+class AllDepartmentsUsersResponse(BaseModel):
+    """Response model for listing users across all departments (SuperAdmin only)"""
+    total_departments: int
+    total_users: int
+    departments: List[DepartmentUsersInfo]
+
+
+class PaginatedDepartmentUsersResponse(BaseModel):
+    """Response model for paginated search of users in a department"""
+    department_name: str
+    total_count: int
+    page: int
+    page_size: int
+    total_pages: int
+    has_next: bool
+    has_previous: bool
+    users: List[DepartmentUserInfo]
+
+
+class PaginatedAllDepartmentsUsersResponse(BaseModel):
+    """Response model for paginated search of users across all departments (SuperAdmin only)"""
+    total_departments: int
+    total_users: int
+    filtered_count: int
+    page: int
+    page_size: int
+    total_pages: int
+    has_next: bool
+    has_previous: bool
+    users: List[DepartmentUserInfo]
+
+
+class UserInfoWithDepartment(BaseModel):
+    """User info including department assignment (used for flat listing without department filter)"""
+    email: str
+    user_name: Optional[str] = None
+    role: str
+    department_name: Optional[str] = None
+    is_active: bool = Field(default=True, description="Whether user is active in their department")
+
+
+class AllUsersResponse(BaseModel):
+    """Response model for listing all users without department filter (SuperAdmin only)"""
+    total_count: int
+    users: List[UserInfoWithDepartment]
+
+
+class PaginatedAllUsersResponse(BaseModel):
+    """Paginated response for all users without department filter (SuperAdmin only)"""
+    total_count: int
+    filtered_count: int
+    page: int
+    page_size: int
+    total_pages: int
+    has_next: bool
+    has_previous: bool
+    users: List[UserInfoWithDepartment]
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# PWD RESET FLOW MODELS
+# ─────────────────────────────────────────────────────────────────────────────
+
+class AdminResetPasswordRequest(BaseModel):
+    """Request model for SuperAdmin to reset a user's PWD with a temporary PWD"""
+    email_id: str = Field(..., description="Target user's email (mail_id)")
+    temporary_password: str = Field(..., description="Temporary password to set for the user")
+
+    @field_validator('email_id')
+    @classmethod
+    def validate_email(cls, v: str) -> str:
+        v = v.strip()
+        if not re.match(r'^[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}$', v):
+            raise ValueError('Invalid email format. Please provide a valid email address (e.g. user@example.com)')
+        return v
+
+    @field_validator('temporary_password')
+    @classmethod
+    def validate_temporary_password(cls, v: str) -> str:
+        try:
+            v = base64.b64decode(v).decode('utf-8')
+        except Exception:
+            raise ValueError('Password must be base64 encoded')
+        if len(v) < 8:
+            raise ValueError('Password must be at least 8 characters long')
+        if not re.search(r'[A-Z]', v):
+            raise ValueError('Password must contain at least one uppercase letter')
+        if not re.search(r'[a-z]', v):
+            raise ValueError('Password must contain at least one lowercase letter')
+        if not re.search(r'[0-9]', v):
+            raise ValueError('Password must contain at least one digit')
+        if not re.search(r'[!@#$%^&*(),.?":{}|<>_\-+=\[\]\\/~`]', v):
+            raise ValueError('Password must contain at least one special character')
+        return v
+
+
+class AdminResetPasswordResponse(BaseModel):
+    """Response model for SuperAdmin PWD reset"""
+    success: bool
+    message: str
+    email: str
+    must_change_password: bool = Field(default=True, description="Flag indicating user must change password on next login")
+
+
+class ChangePasswordRequest(BaseModel):
+    """Request model for user to change their own PWD"""
+    current_password: str = Field(..., description="Current password for verification")
+    new_password: str = Field(..., description="New password to set")
+
+    @field_validator('current_password')
+    @classmethod
+    def decode_current_password(cls, v: str) -> str:
+        try:
+            v = base64.b64decode(v).decode('utf-8')
+        except Exception:
+            raise ValueError('Password must be base64 encoded')
+        return v
+
+    @field_validator('new_password')
+    @classmethod
+    def validate_new_password(cls, v: str) -> str:
+        try:
+            v = base64.b64decode(v).decode('utf-8')
+        except Exception:
+            raise ValueError('Password must be base64 encoded')
+        if len(v) < 8:
+            raise ValueError('Password must be at least 8 characters long')
+        if not re.search(r'[A-Z]', v):
+            raise ValueError('Password must contain at least one uppercase letter')
+        if not re.search(r'[a-z]', v):
+            raise ValueError('Password must contain at least one lowercase letter')
+        if not re.search(r'[0-9]', v):
+            raise ValueError('Password must contain at least one digit')
+        if not re.search(r'[!@#$%^&*(),.?":{}|<>_\-+=\[\]\\/~`]', v):
+            raise ValueError('Password must contain at least one special character')
+        return v
+
+
+class ChangePasswordResponse(BaseModel):
+    """Response model for user PWD change"""
+    success: bool
+    message: str
+
+
+# OAuth Authorization Code Flow Models (MFA Compatible)
+class OAuthLoginInitResponse(BaseModel):
+    """Response when initiating OAuth login - provides redirect URL to Keycloak"""
+    redirect_url: str
+    state: str  # CSRF protection token (store in session/cookie)
+    message: str = "Redirect to Keycloak for authentication"
+
+
+class OAuthCallbackRequest(BaseModel):
+    """Request received from Keycloak after user completes authentication"""
+    code: str  # Authorization code from Keycloak
+    state: str  # CSRF state to validate
+    session_state: Optional[str] = None  # Keycloak session state
+
+
+class OAuthCallbackResponse(BaseModel):
+    """Response after successful OAuth callback - contains tokens and user info"""
+    approval: bool
+    token: Optional[str] = None  # Access token
+    refresh_token: Optional[str] = None
+    id_token: Optional[str] = None  # OpenID Connect ID token
+    role: Optional[str] = None
+    username: Optional[str] = None
+    email: Optional[str] = None
+    department_name: Optional[str] = None  # Current department
+    available_departments: Optional[List['UserDepartmentInfo']] = None  # List of all departments user has access to
+    requires_department_selection: bool = Field(default=False, description="True if user has multiple departments and needs to choose one")
+    message: str
+    expires_in: Optional[int] = None  # Token expiry in seconds
+    status: Optional[str] = Field(default=None, description="Special status: 'PENDING_APPROVAL' for new SSO users awaiting admin approval")
+    frontend_origin: Optional[str] = None  # Which UI initiated this login (used internally for multi-UI redirect)
+
+
+class OAuthLogoutResponse(BaseModel):
+    """Response for OAuth logout"""
+    success: bool
+    logout_url: Optional[str] = None  # Keycloak logout URL for browser redirect
+    message: str
+
+
+class OAuthStateData(BaseModel):
+    """Internal model to store OAuth state data for PKCE validation"""
+    state: str
+    nonce: str
+    code_verifier: str  # PKCE code verifier (stored server-side)
+    redirect_uri: str
+    requested_role: Optional[str] = None
+    frontend_origin: Optional[str] = None  # Which UI initiated this login (for multi-UI support)
+    created_at: datetime
+    expires_at: datetime
+
+
+# ==================== Department Switching Models ====================
+
+class UserDepartmentInfo(BaseModel):
+    """Information about a user's department and role"""
+    department_name: str
+    role: str  # Currently active role in this department
+    roles: List[str] = []  # All roles the user has in this department
+    is_active: bool
+    is_default: bool = False  # True if this is the most recently used department
+    created_at: Optional[datetime] = None
+    last_used_at: Optional[datetime] = None
+
+
+class GetUserDepartmentsResponse(BaseModel):
+    """Response containing all departments a user has access to"""
+    approval: bool
+    departments: List[UserDepartmentInfo]
+    message: str
+
+
+class SwitchRoleRequest(BaseModel):
+    """Request to switch to a different role within a department"""
+    role: str
+    department_name: Optional[str] = None  # If not provided, uses current department from JWT
+
+    @field_validator('role')
+    @classmethod
+    def validate_role(cls, v):
+        if not v or not v.strip():
+            raise ValueError("Role cannot be empty")
+        return v.strip()
+
+
+class SwitchRoleResponse(BaseModel):
+    """Response after switching role with new JWT token"""
+    approval: bool
+    token: Optional[str] = None  # New JWT with new role context
+    refresh_token: Optional[str] = None
+    role: Optional[str] = None
+    department_name: Optional[str] = None
+    available_roles: Optional[List[str]] = None  # All roles in this department
+    message: str
+
+
+class SwitchDepartmentRequest(BaseModel):
+    """Request to switch to a different department"""
+    department_name: str
+
+    @field_validator('department_name')
+    @classmethod
+    def validate_department_name(cls, v):
+        if not v or not v.strip():
+            raise ValueError("Department name cannot be empty")
+        return v.strip()
+
+
+class SwitchDepartmentResponse(BaseModel):
+    """Response after switching department with new JWT token"""
+    approval: bool
+    token: Optional[str] = None  # New JWT with new department context
+    refresh_token: Optional[str] = None
+    role: Optional[str] = None
+    department_name: Optional[str] = None
+    available_roles: Optional[List[str]] = None  # All roles the user has in the new department
+    message: str
+
+
+class SetDefaultDepartmentRequest(BaseModel):
+    """Request to explicitly set a default department (optional - switching auto-sets it)"""
+    department_name: str
+
+    @field_validator('department_name')
+    @classmethod
+    def validate_department_name(cls, v):
+        if not v or not v.strip():
+            raise ValueError("Department name cannot be empty")
+        return v.strip()
+
+
+class SetDefaultDepartmentResponse(BaseModel):
+    """Response after setting default department"""
+    approval: bool
+    department_name: Optional[str] = None
+    message: str
+
+
+# ==================== Authorization Code Exchange Models ====================
+
+class ExchangeCodeRequest(BaseModel):
+    """Request to exchange one-time authorization code for tokens"""
+    code: str
+
+    @field_validator('code')
+    @classmethod
+    def validate_code(cls, v):
+        if not v or not v.strip():
+            raise ValueError("Authorization code cannot be empty")
+        if len(v) < 32:
+            raise ValueError("Invalid authorization code format")
+        return v.strip()
+
+
+class ExchangeCodeResponse(BaseModel):
+    """Response after successful code exchange"""
+    approval: bool
+    token: Optional[str] = None  # JWT access token
+    refresh_token: Optional[str] = None
+    id_token: Optional[str] = None  # OpenID Connect ID token
+    email: Optional[str] = None
+    username: Optional[str] = None
+    role: Optional[str] = None
+    department_name: Optional[str] = None
+    expires_in: Optional[int] = None
+    message: str
+
+
+# ==================== SSO JIT Provisioning Models ====================
+
+class PendingSSOUser(BaseModel):
+    """Information about a pending SSO user awaiting approval"""
+    id: int
+    email: str
+    username: str
+    created_at: datetime
+    is_sso: bool = True
+
+
+class ListPendingSSOUsersResponse(BaseModel):
+    """Response containing list of pending SSO users"""
+    approval: bool
+    pending_users: List[PendingSSOUser]
+    message: str
+
+
+class ApproveSSOUserRequest(BaseModel):
+    """Request to approve a pending SSO user and assign department+role"""
+    request_id: int
+    department_name: str
+    role: str
+
+    @field_validator('department_name')
+    @classmethod
+    def validate_department_name(cls, v):
+        if not v or not v.strip():
+            raise ValueError("Department name cannot be empty")
+        return v.strip()
+
+    @field_validator('role')
+    @classmethod
+    def validate_role(cls, v):
+        if not v or not v.strip():
+            raise ValueError("Role cannot be empty")
+        valid_roles = ['User', 'Developer', 'Admin', 'SuperAdmin']
+        if v not in valid_roles:
+            raise ValueError(f"Role must be one of: {', '.join(valid_roles)}")
+        return v
+
+
+class ApproveSSOUserResponse(BaseModel):
+    """Response after approving SSO user"""
+    approval: bool
+    email: Optional[str] = None
+    department_name: Optional[str] = None
+    role: Optional[str] = None
+    message: str
+
+
+class SSORegisterRequest(BaseModel):
+    """Request for a new SSO user to self-register by selecting their department(s)"""
+    email: str
+    username: str
+    department_names: List[str] = Field(..., min_length=1, description="Department(s) the user wants to join")
+
+    @field_validator('email')
+    @classmethod
+    def validate_email(cls, v: str) -> str:
+        v = v.strip()
+        if not re.match(r'^[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}$', v):
+            raise ValueError('Invalid email format')
+        return v
+
+    @field_validator('department_names')
+    @classmethod
+    def validate_department_names(cls, v: List[str]) -> List[str]:
+        cleaned = list(set(d.strip() for d in v if d.strip()))
+        if not cleaned:
+            raise ValueError('At least one department name is required')
+        return cleaned
+
+
+class SSORegisterResponse(BaseModel):
+    """Response after new SSO user submits department registration"""
+    success: bool
+    message: str
