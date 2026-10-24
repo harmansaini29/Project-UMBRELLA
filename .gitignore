@@ -1,6 +1,7 @@
 # Staging and raw repository caches
 staging/
 data/raw_repos/
+rag/storage/
 *.pyc
 __pycache__/
 .venv/
