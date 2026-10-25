@@ -1,0 +1,41 @@
+{
+  "last_updated": "2026-10-25T10:37:11.356658+00:00",
+  "total_experiences": 2,
+  "q_table": {
+    "payment_service:sqlalchemy.exc.TimeoutError": {
+      "ACT-POOL-SCALE-001": 6.0312
+    }
+  },
+  "experiences": [
+    {
+      "experience_id": "EXP-0001",
+      "incident_signature": "payment_service:sqlalchemy.exc.TimeoutError",
+      "state_vector": {
+        "active_connections": 5.0,
+        "pool_size": 2.0,
+        "pool_utilization": 250.0
+      },
+      "action_signature": "ACT-POOL-SCALE-001",
+      "outcome_success": true,
+      "latency_delta_pct": -25.0,
+      "reward": 12.5,
+      "learned_weight": 3.875,
+      "timestamp": "2026-10-25T10:36:57.383225Z"
+    },
+    {
+      "experience_id": "EXP-0002",
+      "incident_signature": "payment_service:sqlalchemy.exc.TimeoutError",
+      "state_vector": {
+        "active_connections": 5.0,
+        "pool_size": 2.0,
+        "pool_utilization": 250.0
+      },
+      "action_signature": "ACT-POOL-SCALE-001",
+      "outcome_success": true,
+      "latency_delta_pct": -25.0,
+      "reward": 12.5,
+      "learned_weight": 6.03125,
+      "timestamp": "2026-10-25T10:37:11.355648Z"
+    }
+  ]
+}
