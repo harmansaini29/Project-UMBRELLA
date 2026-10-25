@@ -1,0 +1,43 @@
+version: "3.8"
+
+services:
+  umbrella-platform:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: umbrella_mission_control
+    restart: unless-stopped
+    ports:
+      - "8000:8000"
+    environment:
+      - DASHBOARD_HOST=0.0.0.0
+      - DASHBOARD_PORT=8000
+      - DEMO_DATABASE_URL=sqlite:///./demo_booking_db.sqlite
+      - DEMO_POOL_SIZE=2
+      - DEMO_MAX_OVERFLOW=0
+    volumes:
+      - ./data:/app/data
+      - ./capsules:/app/capsules
+      - ./reports:/app/reports
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/api/system/status"]
+      interval: 15s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+
+  umbrella-demo-backend:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: umbrella_demo_backend
+    restart: unless-stopped
+    command: ["uvicorn", "target_system.demo_app.server:app", "--host", "0.0.0.0", "--port", "8002"]
+    ports:
+      - "8002:8002"
+    environment:
+      - DEMO_DATABASE_URL=sqlite:///./demo_booking_db.sqlite
+      - DB_POOL_SIZE=2
+      - DB_MAX_OVERFLOW=0
+    depends_on:
+      - umbrella-platform

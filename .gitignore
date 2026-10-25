@@ -16,3 +16,9 @@ Thumbs.db
 *.sqlite
 *.db
 .umbrella_backups/
+
+# Binary storage capsules
+capsules/*.tar.gz
+capsules/*.sha256
+capsules/*_manifest.json
+

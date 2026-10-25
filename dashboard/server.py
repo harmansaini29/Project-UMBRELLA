@@ -25,6 +25,8 @@ from agents.agent6_evo.config import ObservationTimeFrame, EVOConfig
 from target_system.demo_app.load_simulator import run_concurrency_stress_test
 import target_system.demo_app.config as demo_config
 from target_system.demo_app.database import init_db
+from capsule.dna_packager import DNAPackager
+from capsule.genesis_engine import GenesisEngine
 
 logger = logging.getLogger(__name__)
 
@@ -60,6 +62,7 @@ class TimeFrameUpdateRequest(BaseModel):
 
 class LoadSimulationRequest(BaseModel):
     num_users: int = Field(default=10, ge=2, le=25)
+    scenario: str = Field(default="pool_starvation", example="pool_starvation")
 
 
 @app.get("/")
@@ -98,16 +101,29 @@ def get_system_status():
 
 @app.post("/api/simulate/load")
 def trigger_load_simulation(req: LoadSimulationRequest = Body(...)):
-    """Triggers realistic concurrent transactions against the demo app."""
+    """Triggers realistic concurrent transactions against the demo app under selectable scenarios."""
     global latest_stress_test, latest_incident
-    summary = run_concurrency_stress_test(num_users=req.num_users)
+    summary = run_concurrency_stress_test(num_users=req.num_users, scenario=req.scenario)
     latest_stress_test = summary
 
     # If failure detected, formulate IncidentContext
     if summary["failed_requests"] > 0:
+        if req.scenario == "jwt_auth_failure":
+            incident_title = f"OAuth2 Authentication rejection under {req.num_users} tenants: Token expired"
+            target_f = "target_system/demo_app/server.py"
+            target_l = 65
+        elif req.scenario == "slow_query_deadlock":
+            incident_title = f"Unindexed query scan lock timeout under {req.num_users} concurrent bookings"
+            target_f = "target_system/demo_app/database.py"
+            target_l = 45
+        else:
+            incident_title = f"Demo Booking Service connection starvation under {req.num_users} concurrent tenants"
+            target_f = "target_system/demo_app/config.py"
+            target_l = 10
+
         latest_incident = IncidentContext(
             incident_id=f"INC-{int(time.time())}",
-            title=f"Demo Booking Service connection starvation under {req.num_users} concurrent tenants",
+            title=incident_title,
             service_name="demo_booking_service",
             telemetry=TelemetrySnapshot(
                 service_name="demo_booking_service",
@@ -125,8 +141,8 @@ def trigger_load_simulation(req: LoadSimulationRequest = Body(...)):
                     error_type=summary["first_error_type"] or "TimeoutError",
                     error_message=summary["first_error_msg"] or "QueuePool limit reached",
                     stack_trace=summary["first_stack_trace"] or "",
-                    target_file="target_system/demo_app/config.py",
-                    line_number=10
+                    target_file=target_f,
+                    line_number=target_l
                 )
             ]
         )
@@ -240,6 +256,67 @@ def search_rag_knowledge(query: str = "connection pool timeout exhaustion"):
         }
     except Exception as e:
         return {"error": str(e)}
+
+
+@app.get("/api/capsule/list")
+def list_capsules():
+    """Lists available System DNA Capsules in storage."""
+    capsules_dir = os.path.join(WORKSPACE_DIR, "capsules")
+    if not os.path.exists(capsules_dir):
+        return {"capsules": []}
+
+    capsules = []
+    for f in os.listdir(capsules_dir):
+        if f.endswith(".tar.gz"):
+            full_p = os.path.join(capsules_dir, f)
+            sz_kb = round(os.path.getsize(full_p) / 1024.0, 1)
+            manifest_p = full_p.replace(".tar.gz", "_manifest.json")
+            m_data = {}
+            if os.path.exists(manifest_p):
+                try:
+                    with open(manifest_p, "r", encoding="utf-8") as mf:
+                        m_data = json.load(mf)
+                except Exception:
+                    pass
+            capsules.append({
+                "archive_name": f,
+                "size_kb": sz_kb,
+                "created_at": m_data.get("created_at"),
+                "master_sha256": m_data.get("master_sha256"),
+                "total_files": m_data.get("total_files")
+            })
+    return {"capsules": sorted(capsules, key=lambda x: x["archive_name"], reverse=True)}
+
+
+@app.post("/api/capsule/create")
+def create_system_dna_capsule():
+    """Builds a new System DNA Capsule containing the entire enterprise genome."""
+    packager = DNAPackager(workspace_root=WORKSPACE_DIR)
+    result = packager.create_capsule()
+    return result
+
+
+@app.post("/api/capsule/restore")
+def restore_from_dna_capsule(archive_name: Optional[str] = None):
+    """Resurrects the system from zero using the latest System DNA Capsule."""
+    capsules_dir = os.path.join(WORKSPACE_DIR, "capsules")
+    target_archive = None
+
+    if archive_name:
+        target_archive = os.path.join(capsules_dir, archive_name)
+    else:
+        # Find latest
+        archives = [f for f in os.listdir(capsules_dir) if f.endswith(".tar.gz")]
+        if archives:
+            archives.sort(reverse=True)
+            target_archive = os.path.join(capsules_dir, archives[0])
+
+    if not target_archive or not os.path.exists(target_archive):
+        raise HTTPException(status_code=404, detail="No DNA Capsule archive found to restore.")
+
+    engine = GenesisEngine(workspace_root=WORKSPACE_DIR)
+    report = engine.resurrect_from_capsule(archive_path=target_archive)
+    return report
 
 
 @app.post("/api/reset")

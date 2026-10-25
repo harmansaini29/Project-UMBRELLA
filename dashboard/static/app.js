@@ -20,6 +20,7 @@ const TOPOLOGY_EDGES = [
 document.addEventListener("DOMContentLoaded", () => {
   renderTopology();
   refreshSystemStatus();
+  loadCapsuleRegistry();
   setInterval(refreshSystemStatus, 3000);
 });
 
@@ -78,13 +79,13 @@ async function refreshSystemStatus() {
   }
 }
 
-async function triggerLoadSpike(users = 10) {
-  document.getElementById("status-feed").textContent = `Simulating ${users} concurrent tenant room bookings & payments...`;
+async function triggerLoadSpike(users = 10, scenario = "pool_starvation") {
+  document.getElementById("status-feed").textContent = `Simulating ${users} concurrent tenant transactions under scenario: ${scenario}...`;
   try {
     const res = await fetch("/api/simulate/load", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ num_users: users })
+      body: JSON.stringify({ num_users: users, scenario: scenario })
     });
     const summary = await res.json();
 
@@ -95,22 +96,43 @@ async function triggerLoadSpike(users = 10) {
         ${summary.first_error_type}: ${summary.first_error_msg}
       `;
 
-      // Mark topology nodes
-      TOPOLOGY_NODES.forEach(n => {
-        if (n.id === "demo_booking_service" || n.id === "demo_booking_db") {
-          n.status = "critical";
-        } else {
-          n.status = "degraded";
-        }
-      });
+      // Mark topology nodes based on failure scenario
+      if (scenario === "jwt_auth_failure") {
+        TOPOLOGY_NODES.forEach(n => {
+          if (n.id === "auth_service") n.status = "critical";
+          else if (n.id === "api_gateway" || n.id === "demo_booking_service") n.status = "degraded";
+          else n.status = "healthy";
+        });
+        document.getElementById("badge-blast-radius").textContent = "BLAST: 60%";
+        document.getElementById("topology-impact-desc").textContent = "OAuth2 Auth failure rejecting upstream tenant traffic";
+        document.getElementById("rca-dominant-bottleneck").textContent = 
+          `Authentication Token Rejection: ${summary.first_error_msg}`;
+      } else if (scenario === "slow_query_deadlock") {
+        TOPOLOGY_NODES.forEach(n => {
+          if (n.id === "demo_booking_db") n.status = "critical";
+          else if (n.id === "demo_booking_service") n.status = "degraded";
+          else n.status = "healthy";
+        });
+        document.getElementById("badge-blast-radius").textContent = "BLAST: 40%";
+        document.getElementById("topology-impact-desc").textContent = "Unindexed table scan holding exclusive locks >2,000ms";
+        document.getElementById("rca-dominant-bottleneck").textContent = 
+          `Database Table Lock Contention: ${summary.first_error_msg}`;
+      } else {
+        TOPOLOGY_NODES.forEach(n => {
+          if (n.id === "demo_booking_service" || n.id === "demo_booking_db") {
+            n.status = "critical";
+          } else {
+            n.status = "degraded";
+          }
+        });
+        document.getElementById("badge-blast-radius").textContent = "BLAST: 100%";
+        document.getElementById("topology-impact-desc").textContent = "Downstream QueuePool bottleneck cascading to all callers";
+        document.getElementById("rca-dominant-bottleneck").textContent = 
+          `Database Connection Pool Starvation: ${summary.first_error_msg}`;
+      }
       renderTopology();
 
-      document.getElementById("badge-blast-radius").textContent = "BLAST: 100%";
       document.getElementById("badge-blast-radius").className = "panel-badge badge-critical";
-      document.getElementById("topology-impact-desc").textContent = "Downstream QueuePool bottleneck cascading to all callers";
-
-      document.getElementById("rca-dominant-bottleneck").textContent = 
-        `Database Connection Pool Starvation: ${summary.first_error_msg}`;
       document.getElementById("rca-dominant-bottleneck").style.color = "#ef4444";
       document.getElementById("meter-ast-val").textContent = "95%";
       document.getElementById("meter-ast-bar").style.width = "95%";
@@ -303,5 +325,70 @@ async function resetDemoSystem() {
     location.reload();
   } catch (err) {
     alert("Reset error: " + err);
+  }
+}
+
+async function loadCapsuleRegistry() {
+  try {
+    const res = await fetch("/api/capsule/list");
+    const data = await res.json();
+    const box = document.getElementById("capsule-list-box");
+    if (!box) return;
+
+    if (!data.capsules || data.capsules.length === 0) {
+      box.innerHTML = "No DNA capsules archived yet. Click 'Create System DNA Capsule' to generate one.";
+      return;
+    }
+
+    let html = "";
+    data.capsules.forEach(c => {
+      html += `
+        <div style="margin-bottom:6px; border-bottom:1px solid #1f2937; padding-bottom:4px;">
+          <strong style="color:#38bdf8;">${c.archive_name}</strong> (${c.size_kb} KB)<br>
+          <span style="font-size:0.7rem; color:#9ca3af;">SHA-256: ${c.master_sha256 ? c.master_sha256.substring(0, 16) + '...' : 'Verified'}</span>
+        </div>
+      `;
+    });
+    box.innerHTML = html;
+  } catch (err) {
+    console.error("Capsule list error:", err);
+  }
+}
+
+async function createDNACapsule() {
+  const statusBox = document.getElementById("capsule-status-box");
+  statusBox.textContent = "Packaging System DNA Capsule (calculating SHA-256 for code, databases, RAG indices, and Q-tables)...";
+  try {
+    const res = await fetch("/api/capsule/create", { method: "POST" });
+    const data = await res.json();
+    alert(`System DNA Capsule Created!\nCapsule ID: ${data.capsule_id}\nSize: ${(data.archive_bytes/1024).toFixed(1)} KB\nTotal Files: ${data.total_files}`);
+    statusBox.innerHTML = `
+      <span style="color:#10b981; font-weight:bold;">✓ CAPSULE PRESERVED:</span> ${data.capsule_id}<br>
+      Archive Size: ${(data.archive_bytes/1024).toFixed(1)} KB | Artifacts: ${data.total_files} files<br>
+      Master SHA-256: ${data.master_sha256}
+    `;
+    loadCapsuleRegistry();
+  } catch (err) {
+    alert("Error creating capsule: " + err);
+  }
+}
+
+async function resurrectFromCapsule() {
+  if (!confirm("Initiate Bare-Metal Resurrection from System DNA Capsule? This will verify SHA-256 seals and revive all subsystems from zero.")) return;
+
+  const statusBox = document.getElementById("capsule-status-box");
+  statusBox.textContent = "Executing bare-metal resurrection... verifying cryptographic checksums...";
+  try {
+    const res = await fetch("/api/capsule/restore", { method: "POST" });
+    const data = await res.json();
+    alert(`Resurrection Complete in ${data.resurrection_time_ms} ms!\nArtifacts Restored: ${data.total_artifacts_restored}\nAll 6 Agents & RAG Revived!`);
+    statusBox.innerHTML = `
+      <span style="color:#10b981; font-weight:bold;">🎉 BARE-METAL RESURRECTION COMPLETE:</span> Restored in ${data.resurrection_time_ms} ms<br>
+      Subsystems Online: RAG (${data.subsystem_health.central_hybrid_rag}), Evolution Memory (${data.subsystem_health.agent_6_evolution_memory}), DB (${data.subsystem_health.relational_database})<br>
+      Active Agents Revived: 6/6 Operational
+    `;
+    refreshSystemStatus();
+  } catch (err) {
+    alert("Resurrection error: " + err);
   }
 }

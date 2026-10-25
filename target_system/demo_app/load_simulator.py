@@ -81,14 +81,94 @@ def simulate_single_tenant_transaction(tenant_id: int) -> Dict[str, Any]:
                 pass
 
 
-def run_concurrency_stress_test(num_users: int = 10) -> Dict[str, Any]:
-    """Runs concurrent load test and returns comprehensive metrics."""
+def simulate_jwt_auth_transaction(tenant_id: int) -> Dict[str, Any]:
+    """Simulates an authentication transaction where tokens have expired."""
+    start_time = time.time()
+    try:
+        # Simulate OAuth2 token validation with expired bearer JWT for all except first 2 tenants
+        if tenant_id > 2:
+            raise PermissionError("HTTP 401 Unauthorized: Bearer token validation failed (Signature has expired)")
+        time.sleep(0.05)
+        elapsed_ms = (time.time() - start_time) * 1000.0
+        return {
+            "tenant_id": tenant_id,
+            "success": True,
+            "latency_ms": elapsed_ms,
+            "error_type": None,
+            "error_msg": None,
+            "stack_trace": None
+        }
+    except Exception as e:
+        elapsed_ms = (time.time() - start_time) * 1000.0
+        st = (
+            'Traceback (most recent call last):\n'
+            '  File "target_system/demo_app/server.py", line 65, in book_room\n'
+            '    current_user = verify_jwt_token(auth_header)\n'
+            '  File "target_system/demo_app/auth.py", line 42, in verify_jwt_token\n'
+            '    raise HTTPException(status_code=401, detail="Signature has expired")\n'
+            'fastapi.exceptions.HTTPException: 401: Signature has expired'
+        )
+        return {
+            "tenant_id": tenant_id,
+            "success": False,
+            "latency_ms": elapsed_ms,
+            "error_type": "HTTPException: 401 Unauthorized",
+            "error_msg": str(e),
+            "stack_trace": st
+        }
+
+
+def simulate_slow_query_transaction(tenant_id: int) -> Dict[str, Any]:
+    """Simulates lock contention / unindexed slow query latency spikes."""
+    start_time = time.time()
+    try:
+        if tenant_id > 2:
+            time.sleep(0.5)
+            raise TimeoutError("OperationalError: database table is locked / Query execution exceeded 2000ms deadline")
+        time.sleep(0.10)
+        elapsed_ms = (time.time() - start_time) * 1000.0
+        return {
+            "tenant_id": tenant_id,
+            "success": True,
+            "latency_ms": elapsed_ms,
+            "error_type": None,
+            "error_msg": None,
+            "stack_trace": None
+        }
+    except Exception as e:
+        elapsed_ms = (time.time() - start_time) * 1000.0
+        st = (
+            'Traceback (most recent call last):\n'
+            '  File "target_system/demo_app/server.py", line 68, in book_room\n'
+            '    room = db.query(Room).filter(Room.room_number == req.room_number).first()\n'
+            '  File "target_system/demo_app/database.py", line 45, in execute_query\n'
+            '    raise OperationalError("database table is locked", params, orig)\n'
+            'sqlalchemy.exc.OperationalError: (sqlite3.OperationalError) database table is locked'
+        )
+        return {
+            "tenant_id": tenant_id,
+            "success": False,
+            "latency_ms": elapsed_ms,
+            "error_type": "OperationalError: database table locked",
+            "error_msg": str(e),
+            "stack_trace": st
+        }
+
+
+def run_concurrency_stress_test(num_users: int = 10, scenario: str = "pool_starvation") -> Dict[str, Any]:
+    """Runs concurrent load test under the selected scenario and returns comprehensive metrics."""
     init_db()  # Ensure tables exist
     results: List[Dict[str, Any]] = []
     wall_start = time.time()
 
+    worker_fn = simulate_single_tenant_transaction
+    if scenario == "jwt_auth_failure":
+        worker_fn = simulate_jwt_auth_transaction
+    elif scenario == "slow_query_deadlock":
+        worker_fn = simulate_slow_query_transaction
+
     with ThreadPoolExecutor(max_workers=num_users) as executor:
-        futures = [executor.submit(simulate_single_tenant_transaction, i + 1) for i in range(num_users)]
+        futures = [executor.submit(worker_fn, i + 1) for i in range(num_users)]
         for fut in as_completed(futures):
             results.append(fut.result())
 
@@ -105,6 +185,7 @@ def run_concurrency_stress_test(num_users: int = 10) -> Dict[str, Any]:
     first_error = failed[0] if failed else None
 
     summary = {
+        "scenario": scenario,
         "num_users": num_users,
         "pool_size": config.POOL_SIZE,
         "max_overflow": config.MAX_OVERFLOW,

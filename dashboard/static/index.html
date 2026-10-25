@@ -39,8 +39,14 @@
     <div style="display:flex; align-items:center; gap:12px;">
       <span style="font-size:0.85rem; font-weight:700; color:var(--text-muted);">LIVE TEST CONTROLS:</span>
       <div class="btn-group">
-        <button class="btn-danger" id="btn-trigger-load" onclick="triggerLoadSpike(10)">
-          ⚡ Trigger 10 Concurrent Tenants Load Spike
+        <button class="btn-danger" id="btn-trigger-load" onclick="triggerLoadSpike(10, 'pool_starvation')" title="Scenario 1: Concurrency DB Connection Pool Starvation">
+          ⚡ S1: Pool Starvation
+        </button>
+        <button class="btn-warning" id="btn-trigger-auth" onclick="triggerLoadSpike(10, 'jwt_auth_failure')" style="background:#d97706; color:#fff;" title="Scenario 2: Expired JWT Token Rejection (HTTP 401)">
+          🔑 S2: JWT Auth 401
+        </button>
+        <button class="btn-warning" id="btn-trigger-deadlock" onclick="triggerLoadSpike(10, 'slow_query_deadlock')" style="background:#7c3aed; color:#fff;" title="Scenario 3: Unindexed Query Table Lock Timeout">
+          🔒 S3: Slow Query Lock
         </button>
         <button class="btn-primary" id="btn-trigger-heal" onclick="triggerCouncilHeal()">
           🛡️ Execute 6-Agent Council Self-Healing
@@ -195,7 +201,38 @@
       </div>
     </div>
 
-    <!-- Panel 6: Live RAG Knowledge Explorer -->
+    <!-- Panel 6: System DNA Storage Capsule & Genesis Engine -->
+    <div class="panel full-width">
+      <div class="panel-header">
+        <div class="panel-title">
+          <span>🧬 SYSTEM DNA STORAGE CAPSULE & GENESIS ENGINE (DISASTER RECOVERY FROM 0)</span>
+        </div>
+        <div style="display:flex; gap:10px;">
+          <button class="btn-primary" onclick="createDNACapsule()" style="font-size:0.75rem; padding:4px 12px;">
+            💾 Create System DNA Capsule
+          </button>
+          <button class="btn-success" onclick="resurrectFromCapsule()" style="font-size:0.75rem; padding:4px 12px;">
+            ⚡ 1-Click Bare-Metal Resurrection
+          </button>
+        </div>
+      </div>
+      <div style="display:grid; grid-template-columns: 1fr 2fr; gap:20px;">
+        <div>
+          <div style="font-size:0.8rem; color:var(--text-muted); margin-bottom:6px;">IMMUTABLE CAPSULE REGISTRY:</div>
+          <div class="code-block" id="capsule-list-box" style="max-height:120px;">
+            Loading capsules...
+          </div>
+        </div>
+        <div>
+          <div style="font-size:0.8rem; color:var(--text-muted); margin-bottom:6px;">RESURRECTION & COLD-START STATUS:</div>
+          <div class="code-block" id="capsule-status-box" style="max-height:120px;">
+            System DNA preservation active. Encapsulates Codebase AST, SQLite/PG Schemas, 23,769 RAG Chunks, Agent 6 Reinforcement Learning Memory, and Cluster Topology.
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Panel 7: Live RAG Knowledge Explorer -->
     <div class="panel full-width">
       <div class="panel-header">
         <div class="panel-title">
