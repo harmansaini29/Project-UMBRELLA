@@ -861,16 +861,27 @@ def page_10(pdf):
     plt.close(fig)
 
 
+def get_output_pdf_path():
+    try:
+        with open(OUTPUT_PDF, "a+"):
+            pass
+        return OUTPUT_PDF
+    except (PermissionError, OSError):
+        alt_path = REPORTS_DIR / "UMBRELLA_Research_Paper_Evidence_Clean.pdf"
+        print(f"[NOTE] '{OUTPUT_PDF.name}' is currently locked by a PDF reader. Compiling to '{alt_path.name}'.")
+        return alt_path
+
 # ==============================================================================
 # MAIN COMPILER
 # ==============================================================================
 def main():
+    target_pdf = get_output_pdf_path()
     print("=" * 80)
     print("PROJECT UMBRELLA: GENERATING CLEAN, BOX-FREE 10-PAGE RESEARCH EVIDENCE PDF")
-    print(f"Destination: {OUTPUT_PDF}")
+    print(f"Destination: {target_pdf}")
     print("=" * 80)
 
-    with PdfPages(OUTPUT_PDF) as pdf:
+    with PdfPages(target_pdf) as pdf:
         meta = pdf.infodict()
         meta['Title'] = 'Project UMBRELLA: Academic Research Paper Evidence'
         meta['Author'] = 'Harman Saini, Chhatrapati Shivaji Maharaj University (CSMU)'
@@ -895,8 +906,8 @@ def main():
             print(f"[{tag}] Rendering {description}...")
             fn(pdf)
 
-    size_kb = OUTPUT_PDF.stat().st_size / 1024.0
-    print(f"\n[SUCCESS] Box-Free PDF generated successfully: {OUTPUT_PDF}")
+    size_kb = target_pdf.stat().st_size / 1024.0
+    print(f"\n[SUCCESS] Box-Free PDF generated successfully: {target_pdf}")
     print(f"File Size : {size_kb:.1f} KB")
     print(f"Total Pages: {TOTAL_PAGES}")
 
