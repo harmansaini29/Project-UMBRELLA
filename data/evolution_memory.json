@@ -1,12 +1,12 @@
 {
-  "last_updated": "2026-10-26T06:53:29.766507+00:00",
-  "total_experiences": 16,
+  "last_updated": "2026-10-26T07:27:44.708764+00:00",
+  "total_experiences": 18,
   "q_table": {
     "payment_service:sqlalchemy.exc.TimeoutError": {
-      "ACT-POOL-SCALE-001": 11.8524
+      "ACT-POOL-SCALE-001": 12.0143
     },
     "demo_booking_service:TimeoutError": {
-      "ACT-POOL-SCALE-001": 10.06
+      "ACT-POOL-SCALE-001": 10.795
     },
     "demo_booking_service:OperationalError: database table locked": {
       "ACT-POOL-SCALE-001": 3.875
@@ -252,6 +252,36 @@
       "reward": 12.5,
       "learned_weight": 11.852375,
       "timestamp": "2026-10-26T06:53:29.764507Z"
+    },
+    {
+      "experience_id": "EXP-0017",
+      "incident_signature": "demo_booking_service:TimeoutError",
+      "state_vector": {
+        "active_connections": 10.0,
+        "pool_size": 10.0,
+        "pool_utilization": 0.0
+      },
+      "action_signature": "ACT-POOL-SCALE-001",
+      "outcome_success": true,
+      "latency_delta_pct": -30.0,
+      "reward": 13.0,
+      "learned_weight": 10.795,
+      "timestamp": "2026-10-26T07:26:24.931412Z"
+    },
+    {
+      "experience_id": "EXP-0018",
+      "incident_signature": "payment_service:sqlalchemy.exc.TimeoutError",
+      "state_vector": {
+        "active_connections": 5.0,
+        "pool_size": 2.0,
+        "pool_utilization": 250.0
+      },
+      "action_signature": "ACT-POOL-SCALE-001",
+      "outcome_success": true,
+      "latency_delta_pct": -25.0,
+      "reward": 12.5,
+      "learned_weight": 12.014299999999999,
+      "timestamp": "2026-10-26T07:27:44.707330Z"
     }
   ]
 }

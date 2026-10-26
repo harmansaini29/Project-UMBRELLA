@@ -79,6 +79,8 @@ class IncidentContext(BaseModel):
     errors: List[ErrorEvent] = Field(default_factory=list)
     environment: str = Field(default="production")
     raw_logs: Optional[str] = Field(default=None)
+    repo_path: Optional[str] = Field(default=None, description="Root repository path of affected microservice")
+    config_file: Optional[str] = Field(default=None, description="Path to active configuration file")
 
 
 # ============================================================================

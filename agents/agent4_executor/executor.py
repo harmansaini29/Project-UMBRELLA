@@ -127,6 +127,15 @@ class SandboxedExecutor:
         stdout_log = ""
         stderr_log = ""
 
+        target_abs = os.path.abspath(target_file)
+        current_repo = os.path.abspath(os.getcwd())
+
+        # If target file is within Project-UMBRELLA workspace, run from workspace root; otherwise run in external repo dir
+        if current_repo in target_abs:
+            repo_dir = current_repo
+        else:
+            repo_dir = os.path.dirname(target_abs)
+
         if action.verification_command:
             try:
                 proc = subprocess.run(
@@ -135,7 +144,7 @@ class SandboxedExecutor:
                     capture_output=True,
                     text=True,
                     timeout=30.0,
-                    cwd=os.getcwd()
+                    cwd=repo_dir
                 )
                 stdout_log = proc.stdout
                 stderr_log = proc.stderr
@@ -156,16 +165,17 @@ class SandboxedExecutor:
         if test_passed:
             commit_sha = "auto-patch-applied"
             try:
-                target_dir = os.path.dirname(target_file)
-                p_add = subprocess.run(["git", "add", target_file], cwd=target_dir, capture_output=True, text=True, timeout=5.0)
-                p_commit = subprocess.run(
-                    ["git", "commit", "-m", f"[UMBRELLA-AUTO-REMEDIATION] {action.title} ({action.action_id})"],
-                    cwd=target_dir, capture_output=True, text=True, timeout=5.0
-                )
-                if p_commit.returncode == 0:
-                    p_sha = subprocess.run(["git", "rev-parse", "--short", "HEAD"], cwd=target_dir, capture_output=True, text=True, timeout=5.0)
-                    if p_sha.returncode == 0 and p_sha.stdout.strip():
-                        commit_sha = f"git-{p_sha.stdout.strip()}"
+                p_add = subprocess.run(["git", "add", target_file], cwd=repo_dir, capture_output=True, text=True, timeout=5.0)
+                # Check if there are staged changes to commit
+                p_diff = subprocess.run(["git", "diff", "--cached", "--quiet"], cwd=repo_dir, timeout=5.0)
+                if p_diff.returncode != 0:
+                    subprocess.run(
+                        ["git", "commit", "-m", f"[UMBRELLA-AUTO-REMEDIATION] {action.title} ({action.action_id})"],
+                        cwd=repo_dir, capture_output=True, text=True, timeout=5.0
+                    )
+                p_sha = subprocess.run(["git", "rev-parse", "--short", "HEAD"], cwd=repo_dir, capture_output=True, text=True, timeout=5.0)
+                if p_sha.returncode == 0 and p_sha.stdout.strip():
+                    commit_sha = f"git-{p_sha.stdout.strip()}"
             except Exception:
                 pass
 

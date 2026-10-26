@@ -182,9 +182,9 @@ python -m unittest discover -s tests -p "test_*.py"
 cd "e:\Cloned Github Repo\Umbrella-demo-app"
 python test_demo_app.py
 ```
-*(All 5 tests pass with 0 errors)*
+*(All 6 tests pass with 0 errors, validating 10-payment spike, 100-user 1 RPS wave, and combined concurrency chaos).*
 
 ### 4. Run Both Platforms Simultaneously
 - **UMBRELLA Mission Control**: `python start_platform.py` (Port 8000)
 - **Umbrella Demo App (Karamstay)**: `python start_demo_app.py` in `Umbrella-demo-app` (Port 8002)
-- Open browser to **`http://localhost:8002`** and click **"⚡ Fire 10 Simultaneous Payments"** to watch the real-time crash and autonomous closed-loop self-healing unfold on **`http://localhost:8000`**!
+- Open browser to **`http://localhost:8002`** and click **"⚡ SWITCH ON: 10 Payments + 100 Tenants (1 RPS)"** or **"⚡ Fire 10 Simultaneous Payments"** to watch the real-time crash and autonomous closed-loop self-healing unfold on **`http://localhost:8000`**!

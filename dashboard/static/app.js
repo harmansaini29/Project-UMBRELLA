@@ -161,14 +161,27 @@ function renderCouncilRun(result) {
     document.getElementById("badge-rca-confidence").textContent = `CONFIDENCE: ${(a1.overall_confidence * 100).toFixed(0)}%`;
     document.getElementById("rca-code-pointer").textContent = `AST Pointer: ${cause.target_file || 'config.py'}:${cause.line_number || 1}`;
 
-    document.getElementById("meter-ast-val").textContent = "95%";
-    document.getElementById("meter-ast-bar").style.width = "95%";
-    document.getElementById("meter-telemetry-val").textContent = "100%";
-    document.getElementById("meter-telemetry-bar").style.width = "100%";
-    document.getElementById("meter-config-val").textContent = "100%";
-    document.getElementById("meter-config-bar").style.width = "100%";
-    document.getElementById("meter-rag-val").textContent = "90%";
-    document.getElementById("meter-rag-bar").style.width = "90%";
+    // Dynamically calculate live signal confidence from correlated_signals
+    if (a1.correlated_signals) {
+      const s1 = a1.correlated_signals["signal_1_ast"];
+      const s2 = a1.correlated_signals["signal_2_telemetry"];
+      const s3 = a1.correlated_signals["signal_3_config"];
+      const s4 = a1.correlated_signals["signal_4_rag"];
+
+      const pct1 = s1 ? Math.min(100, Math.round((s1.confidence_contribution / (s1.weight || 0.35)) * 100)) : 85;
+      const pct2 = s2 ? Math.min(100, Math.round((s2.confidence_contribution / (s2.weight || 0.25)) * 100)) : 90;
+      const pct3 = s3 ? Math.min(100, Math.round((s3.confidence_contribution / (s3.weight || 0.20)) * 100)) : 95;
+      const pct4 = s4 ? Math.min(100, Math.round((s4.confidence_contribution / (s4.weight || 0.20)) * 100)) : 80;
+
+      document.getElementById("meter-ast-val").textContent = `${pct1}%`;
+      document.getElementById("meter-ast-bar").style.width = `${pct1}%`;
+      document.getElementById("meter-telemetry-val").textContent = `${pct2}%`;
+      document.getElementById("meter-telemetry-bar").style.width = `${pct2}%`;
+      document.getElementById("meter-config-val").textContent = `${pct3}%`;
+      document.getElementById("meter-config-bar").style.width = `${pct3}%`;
+      document.getElementById("meter-rag-val").textContent = `${pct4}%`;
+      document.getElementById("meter-rag-bar").style.width = `${pct4}%`;
+    }
   }
 
   // Agent 3 Planner

@@ -20,6 +20,28 @@ class TestFullCouncil(unittest.TestCase):
     def setUp(self):
         self.orchestrator = CouncilOrchestrator()
 
+    def tearDown(self):
+        cfg = os.path.join(os.path.dirname(__file__), "..", "target_system", "payment_service", "config.py")
+        if os.path.exists(cfg):
+            with open(cfg, "w", encoding="utf-8") as f:
+                f.write(
+                    '"""\nConfiguration\nContains connection pool limits and service parameters.\n"""\n\n'
+                    'import os\n\n'
+                    '# Connection pool settings - Intentionally constrained for predictable incident demonstration\n'
+                    'DATABASE_URL = os.environ.get("DATABASE_URL", "sqlite:///./payment_db.sqlite")\n'
+                    'POOL_SIZE = int(os.environ.get("DB_POOL_SIZE", "2"))\n'
+                    'MAX_OVERFLOW = int(os.environ.get("DB_MAX_OVERFLOW", "0"))\n'
+                    'POOL_TIMEOUT = float(os.environ.get("DB_POOL_TIMEOUT", "1.0"))\n'
+                    'SERVICE_PORT = int(os.environ.get("SERVICE_PORT", "8001"))\n'
+                )
+        try:
+            import subprocess
+            p_log = subprocess.run(["git", "log", "-1", "--format=%s"], capture_output=True, text=True)
+            if "ACT-POOL-SCALE-001" in p_log.stdout:
+                subprocess.run(["git", "reset", "HEAD~1"], capture_output=True)
+        except Exception:
+            pass
+
     def test_end_to_end_self_healing_and_evolution(self):
         """Tests complete 6-Agent Council on Payment Concurrency Timeout."""
         incident = IncidentContext(

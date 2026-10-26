@@ -75,10 +75,18 @@ class RootCauseAnalyzer:
         config_data: Dict[str, Any] = {}
         # Try inspecting config.py if payment service, demo app, or connected target system
         candidate_configs = []
+        if incident.config_file and os.path.exists(incident.config_file):
+            candidate_configs.append(incident.config_file)
+        if incident.repo_path:
+            cfg_repo = os.path.join(incident.repo_path, "config.py")
+            if os.path.exists(cfg_repo) and cfg_repo not in candidate_configs:
+                candidate_configs.append(cfg_repo)
+
         if primary_err and primary_err.target_file and os.path.exists(primary_err.target_file):
-            candidate_configs.append(primary_err.target_file)
+            if primary_err.target_file not in candidate_configs:
+                candidate_configs.append(primary_err.target_file)
             cfg_in_dir = os.path.join(os.path.dirname(primary_err.target_file), "config.py")
-            if os.path.exists(cfg_in_dir):
+            if os.path.exists(cfg_in_dir) and cfg_in_dir not in candidate_configs:
                 candidate_configs.append(cfg_in_dir)
 
         candidate_configs.extend([

@@ -83,6 +83,7 @@ class ClientRegistrationRequest(BaseModel):
     service_name: str
     repo_path: Optional[str] = None
     config_file: Optional[str] = None
+    service_url: Optional[str] = "http://localhost:8002"
     auto_heal_enabled: bool = True
     registered_at: float = Field(default_factory=time.time)
     pid: Optional[int] = None
@@ -102,6 +103,7 @@ class IncidentReportRequest(BaseModel):
     stack_trace: str
     target_file: Optional[str] = None
     target_line: Optional[int] = 1
+    config_file: Optional[str] = None
     context: Dict[str, Any] = Field(default_factory=dict)
     repo_path: Optional[str] = None
 
@@ -269,10 +271,15 @@ def ingest_client_incident(req: IncidentReportRequest):
     failed_cnt = summary_data.get("failed_requests", 8)
     p95_lat = summary_data.get("p95_latency_ms", 1450.0)
 
+    active_repo = req.repo_path or registered_clients.get(req.service_name, {}).get("repo_path")
+    active_cfg = req.config_file or registered_clients.get(req.service_name, {}).get("config_file")
+
     latest_incident = IncidentContext(
         incident_id=f"INC-{int(time.time())}",
         title=f"{req.service_name}: {req.error_type} under concurrency load",
         service_name=req.service_name,
+        repo_path=active_repo,
+        config_file=active_cfg,
         telemetry=TelemetrySnapshot(
             service_name=req.service_name,
             active_connections=num_users,
@@ -289,7 +296,7 @@ def ingest_client_incident(req: IncidentReportRequest):
                 error_type=req.error_type,
                 error_message=req.error_message,
                 stack_trace=req.stack_trace,
-                target_file=req.target_file or "config.py",
+                target_file=req.target_file or active_cfg or "config.py",
                 line_number=req.target_line or 1
             )
         ]
@@ -385,6 +392,19 @@ def approve_hitl_action(req: Optional[HITLApprovalRequest] = None):
     latest_council_run["awaiting_hitl_approval"] = False
     pending_remediation_plan = None
 
+    # Proactively notify connected client microservice to reload in-memory capacity
+    target_service_url = registered_clients.get(incident.service_name, {}).get("service_url", "http://localhost:8002")
+    try:
+        req_reload = urllib.request.Request(
+            f"{target_service_url}/api/config/reload",
+            data=b"{}",
+            headers={"Content-Type": "application/json"}
+        )
+        with urllib.request.urlopen(req_reload, timeout=2.0) as _:
+            push_log("INFO", "SDK", f"Notified '{incident.service_name}' ({target_service_url}) to dynamically reload config.")
+    except Exception:
+        pass
+
     push_log("SUCCESS", "COUNCIL", f"Self-healing complete. Status: {exec_res.status.value}. Git commit: {exec_res.git_commit_sha}")
     return latest_council_run
 
@@ -423,9 +443,16 @@ def get_live_topology():
     is_crashed = latest_incident is not None and latest_council_run and latest_council_run.get("awaiting_hitl_approval")
     app_status = "critical" if is_crashed else ("degraded" if (latest_stress_test and latest_stress_test.get("failed_requests", 0) > 0) else "healthy")
 
+    # Dynamically determine active pool size from live telemetry stream
+    current_pool_size = 2
+    if live_telemetry_stream and "pool_size" in live_telemetry_stream[0].get("data", {}):
+        current_pool_size = live_telemetry_stream[0]["data"]["pool_size"]
+    elif os.path.exists(os.path.join(WORKSPACE_DIR, "target_system", "demo_app", "config.py")):
+        current_pool_size = demo_config.POOL_SIZE
+
     nodes.extend([
         {"id": "client_service", "label": f"Client App: {client_name}", "x": 140, "y": -20, "status": app_status},
-        {"id": "client_db_pool", "label": "SQL QueuePool (Size: 2)", "x": 140, "y": 70, "status": "critical" if is_crashed else "healthy"},
+        {"id": "client_db_pool", "label": f"SQL QueuePool (Size: {current_pool_size})", "x": 140, "y": 70, "status": "critical" if is_crashed else "healthy"},
         {"id": "payment_gateway", "label": "Payment Gateway (1.4s Lock)", "x": -140, "y": 70, "status": "healthy"}
     ])
     edges.extend([
