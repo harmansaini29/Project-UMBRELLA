@@ -3,21 +3,30 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>Project UMBRELLA | Autonomous Multi-Agent Self-Healing & Evolution Cockpit</title>
+  <title>Project UMBRELLA | Autonomous Multi-Agent Resilience & Self-Healing Platform</title>
   <link rel="stylesheet" href="/static/style.css">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500;600;700&display=swap" rel="stylesheet">
 </head>
 <body>
 
   <!-- Top Header & HUD Stats -->
   <header>
-    <div>
-      <div class="brand-title">PROJECT UMBRELLA</div>
-      <div class="brand-subtitle">Risk-Aware Multi-Agent Self-Healing & Autonomous Evolution Platform</div>
+    <div class="brand-container">
+      <div class="brand-icon">☂️</div>
+      <div>
+        <div class="brand-title">
+          PROJECT UMBRELLA
+          <span class="brand-badge">Enterprise Edition</span>
+        </div>
+        <div class="brand-subtitle">Risk-Aware Multi-Agent Autonomous Self-Healing & Resilience Platform</div>
+      </div>
     </div>
     <div class="hud-stats">
       <div class="hud-card">
         <div class="hud-label">Cluster State</div>
-        <div class="hud-value" id="hud-cluster-state" style="color: var(--accent-green);">HEALTHY</div>
+        <div class="hud-value" id="hud-cluster-state" style="color: var(--status-healthy);">HEALTHY</div>
       </div>
       <div class="hud-card">
         <div class="hud-label">DB Pool Headroom</div>
@@ -25,7 +34,7 @@
       </div>
       <div class="hud-card">
         <div class="hud-label">Failover Redundancy</div>
-        <div class="hud-value" style="color: var(--accent-cyan);">ACTIVE (Agent 5)</div>
+        <div class="hud-value" style="color: var(--agent-plan);">ACTIVE (Agent 5)</div>
       </div>
       <div class="hud-card">
         <div class="hud-label">RAG Knowledge Chunks</div>
@@ -34,30 +43,30 @@
     </div>
   </header>
 
-  <!-- Live Control Actions Bar -->
-  <div class="control-bar">
-    <div style="display:flex; align-items:center; gap:12px;">
-      <span style="font-size:0.85rem; font-weight:700; color:var(--text-muted);">LIVE TEST CONTROLS:</span>
-      <div class="btn-group">
-        <button class="btn-danger" id="btn-trigger-load" onclick="triggerLoadSpike(10, 'pool_starvation')" title="Scenario 1: Concurrency DB Connection Pool Starvation">
-          ⚡ S1: Pool Starvation
-        </button>
-        <button class="btn-warning" id="btn-trigger-auth" onclick="triggerLoadSpike(10, 'jwt_auth_failure')" style="background:#d97706; color:#fff;" title="Scenario 2: Expired JWT Token Rejection (HTTP 401)">
-          🔑 S2: JWT Auth 401
-        </button>
-        <button class="btn-warning" id="btn-trigger-deadlock" onclick="triggerLoadSpike(10, 'slow_query_deadlock')" style="background:#7c3aed; color:#fff;" title="Scenario 3: Unindexed Query Table Lock Timeout">
-          🔒 S3: Slow Query Lock
-        </button>
-        <button class="btn-primary" id="btn-trigger-heal" onclick="triggerCouncilHeal()">
-          🛡️ Execute 6-Agent Council Self-Healing
-        </button>
-        <button onclick="resetDemoSystem()">
-          🔄 Reset Demo Backend
-        </button>
+  <!-- Enterprise Sentry & Passive Ingestion Hub (Replaces old mock buttons) -->
+  <div class="sentry-banner">
+    <div class="sentry-status-left">
+      <span class="sentry-pill">
+        <span class="radar-dot"></span>
+        PASSIVE SENTRY ACTIVE
+      </span>
+      <div class="sentry-meta-item">
+        <span>Ingestion Route:</span>
+        <strong>POST /api/sdk/incident</strong>
+      </div>
+      <div class="sentry-meta-item">
+        <span>Telemetry Stream:</span>
+        <strong>POST /api/sdk/telemetry</strong>
+      </div>
+      <div class="sentry-meta-item">
+        <span>Target Service:</span>
+        <strong id="target-service-display">karamstay_demo_app (Port 8002)</strong>
       </div>
     </div>
-    <div style="font-size:0.8rem; color:var(--text-muted);" id="status-feed">
-      System Ready. Target: Karamstay Demo Booking Microservice.
+    <div class="sentry-status-right">
+      <div style="font-size:0.8rem; color:var(--text-muted);" id="status-feed">
+        Sentry armed. Listening for live client telemetry and incident dispatches...
+      </div>
     </div>
   </div>
 
@@ -75,8 +84,8 @@
       <svg class="topology-canvas" id="topology-svg" viewBox="-250 -140 500 280">
         <!-- SVG elements injected dynamically by app.js -->
       </svg>
-      <div style="margin-top:10px; font-size:0.75rem; color:var(--text-muted); display:flex; justify-content:space-between;">
-        <span>Mesh: Ingress ➔ Auth ➔ Demo Booking ➔ SQLite QueuePool</span>
+      <div style="margin-top:12px; font-size:0.77rem; color:var(--text-muted); display:flex; justify-content:space-between;">
+        <span>Mesh: Ingress ➔ Auth Gate ➔ Client Microservice ➔ SQLite QueuePool</span>
         <span id="topology-impact-desc">All nodes operational</span>
       </div>
     </div>
@@ -89,19 +98,19 @@
         </div>
         <span class="panel-badge badge-active" id="badge-rca-confidence">CONFIDENCE: --</span>
       </div>
-      <div style="margin-bottom:12px;">
-        <div style="font-size:0.75rem; color:var(--text-muted); margin-bottom:4px;">DOMINANT BOTTLENECK:</div>
-        <div style="font-weight:700; color:#38bdf8; font-size:0.9rem;" id="rca-dominant-bottleneck">
-          No active faults detected. System running within thresholds.
+      <div style="margin-bottom:14px;">
+        <div style="font-size:0.75rem; font-weight:700; color:var(--text-muted); text-transform:uppercase; letter-spacing:0.5px; margin-bottom:4px;">DOMINANT BOTTLENECK:</div>
+        <div style="font-weight:700; color:var(--text-main); font-size:0.95rem;" id="rca-dominant-bottleneck">
+          No active faults detected. System running within nominal thresholds.
         </div>
       </div>
-      <div style="margin-bottom:12px;">
+      <div style="margin-bottom:14px;">
         <div class="meter-row">
           <div class="meter-label"><span>Signal 1: Stack Trace & AST Exception Node</span><span id="meter-ast-val">0%</span></div>
           <div class="meter-bg"><div class="meter-fill" id="meter-ast-bar" style="width: 0%;"></div></div>
         </div>
         <div class="meter-row">
-          <div class="meter-label"><span>Signal 2: Telemetry Saturation (Connection Saturation)</span><span id="meter-telemetry-val">0%</span></div>
+          <div class="meter-label"><span>Signal 2: Telemetry Saturation (Connection Pool Saturation)</span><span id="meter-telemetry-val">0%</span></div>
           <div class="meter-bg"><div class="meter-fill" id="meter-telemetry-bar" style="width: 0%;"></div></div>
         </div>
         <div class="meter-row">
@@ -113,7 +122,7 @@
           <div class="meter-bg"><div class="meter-fill" id="meter-rag-bar" style="width: 0%;"></div></div>
         </div>
       </div>
-      <div class="code-block" id="rca-code-pointer">AST Pointer: target_system/demo_app/config.py:10</div>
+      <div class="code-block" id="rca-code-pointer">AST Pointer: config.py:10</div>
     </div>
 
     <!-- Panel 3: Agent 3 (Remediation Planner & Cheat Sheet) -->
@@ -124,15 +133,15 @@
         </div>
         <span class="panel-badge badge-active" id="badge-risk-tier">TIER: N/A</span>
       </div>
-      <div style="font-size:0.8rem; color:var(--text-muted); margin-bottom:6px;">PROPOSED UNIFIED DIFF PATCH:</div>
+      <div style="font-size:0.78rem; font-weight:600; color:var(--text-muted); margin-bottom:8px;">PROPOSED UNIFIED DIFF PATCH:</div>
       <div class="code-block" id="diff-preview">
-        // Unified diff will generate here when fault occurs
+        // Unified diff patch will generate dynamically when an incident is ingested
         // Example: POOL_SIZE = 2 -> POOL_SIZE = 10
       </div>
-      <div style="margin-top:10px;">
-        <div style="font-size:0.75rem; color:var(--text-muted); margin-bottom:4px;">VERIFICATION COMMAND:</div>
-        <div class="code-block" style="padding:6px 10px; max-height:40px;" id="verification-cmd">
-          python target_system/demo_app/load_simulator.py --users 10
+      <div style="margin-top:12px;">
+        <div style="font-size:0.75rem; font-weight:600; color:var(--text-muted); margin-bottom:4px;">VERIFICATION COMMAND:</div>
+        <div class="code-block" style="padding:8px 12px; max-height:45px;" id="verification-cmd">
+          python -m unittest test_demo_app.py
         </div>
       </div>
     </div>
@@ -145,16 +154,16 @@
         </div>
         <span class="panel-badge badge-active" id="badge-guardian-state">GATE: STANDBY</span>
       </div>
-      <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:10px;">
+      <div style="display:flex; justify-content:space-between; align-items:center; background:var(--bg-canvas); border:1px solid var(--border-color); border-radius:12px; padding:12px 16px; margin-bottom:12px;">
         <div>
-          <div style="font-size:0.75rem; color:var(--text-muted);">HUMAN-IN-THE-LOOP AUTHORIZATION:</div>
-          <div style="font-size:0.85rem; font-weight:600;" id="guardian-auth-status">Awaiting incident plan...</div>
+          <div style="font-size:0.72rem; font-weight:700; color:var(--text-muted); text-transform:uppercase;">HUMAN-IN-THE-LOOP AUTHORIZATION:</div>
+          <div style="font-size:0.85rem; font-weight:600; color:var(--text-main); margin-top:2px;" id="guardian-auth-status">Awaiting incident dispatch...</div>
         </div>
-        <button class="btn-success" id="btn-hitl-approve" onclick="approveAndExecute()" style="display:none;">
-          ✓ Approve & Execute Patch
+        <button class="btn-primary" id="btn-hitl-approve" onclick="approveAndExecute()" style="display:none; padding:8px 16px;">
+          ✓ Authorize & Apply Remediation Patch
         </button>
       </div>
-      <div style="font-size:0.75rem; color:var(--text-muted); margin-bottom:4px;">SANDBOXED EXECUTION LOGS:</div>
+      <div style="font-size:0.75rem; font-weight:600; color:var(--text-muted); margin-bottom:4px;">SANDBOXED EXECUTION LOGS:</div>
       <div class="code-block" id="executor-terminal">
         [IDLE] Sandboxed execution worktree clean. Rollback trap armed.
       </div>
@@ -167,9 +176,9 @@
           <span>🧠 AGENT 6: UMBRELLA-EVO AUTONOMOUS EVOLUTION CENTER</span>
         </div>
         <div style="display:flex; align-items:center; gap:12px;">
-          <label style="font-size:0.75rem; color:var(--text-muted);">OBSERVATION TIME-FRAME:</label>
-          <select id="evo-timeframe-select" onchange="onTimeFrameChange()" style="background:#1f2937; color:#f3f4f6; border:1px solid #374151; padding:4px 8px; border-radius:4px; font-weight:600;">
-            <option value="24h" selected>24 Hours (Demo Small-Data Mode)</option>
+          <label style="font-size:0.78rem; font-weight:600; color:var(--text-muted);">OBSERVATION WINDOW:</label>
+          <select id="evo-timeframe-select" onchange="onTimeFrameChange()" style="background:var(--bg-card); color:var(--text-main); border:1px solid var(--border-color); padding:6px 14px; border-radius:var(--pill-radius); font-weight:600; font-size:0.8rem; cursor:pointer;">
+            <option value="24h" selected>24 Hours (Rolling Production Window)</option>
             <option value="48h">48 Hours</option>
             <option value="1w">1 Week</option>
             <option value="2w">2 Weeks</option>
@@ -180,7 +189,7 @@
       </div>
       <div style="display:grid; grid-template-columns: 1fr 2fr; gap:20px;">
         <div>
-          <div style="font-size:0.8rem; color:var(--text-muted); margin-bottom:6px;">REINFORCEMENT LEARNING STATS:</div>
+          <div style="font-size:0.8rem; font-weight:600; color:var(--text-muted); margin-bottom:8px;">REINFORCEMENT LEARNING STATS:</div>
           <div class="code-block" id="evo-stats-box">
             Total Experiences: 0<br>
             Success Rate: 100%<br>
@@ -188,14 +197,14 @@
           </div>
         </div>
         <div>
-          <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:6px;">
-            <div style="font-size:0.8rem; color:var(--text-muted);">PROACTIVE CODE REFACTORING PROPOSAL:</div>
-            <button class="btn-primary" id="btn-approve-evo" onclick="approveEvolution()" style="padding:4px 12px; font-size:0.75rem; display:none;">
+          <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:8px;">
+            <div style="font-size:0.8rem; font-weight:600; color:var(--text-muted);">PROACTIVE CODE REFACTORING PROPOSAL:</div>
+            <button class="btn-primary" id="btn-approve-evo" onclick="approveEvolution()" style="padding:5px 14px; font-size:0.78rem; display:none;">
               🚀 Approve & Merge Proactive Evolution
             </button>
           </div>
           <div class="code-block" id="evo-proposal-box">
-            Agent 6 EVO observing backend health. Change time-frame to '24 Hours' after load testing to view preemptive code refactoring diffs.
+            Agent 6 EVO observing backend health. As traffic patterns stabilize, preemptive code refactoring diffs are synthesized automatically.
           </div>
         </div>
       </div>
@@ -208,25 +217,25 @@
           <span>🧬 SYSTEM DNA STORAGE CAPSULE & GENESIS ENGINE (DISASTER RECOVERY FROM 0)</span>
         </div>
         <div style="display:flex; gap:10px;">
-          <button class="btn-primary" onclick="createDNACapsule()" style="font-size:0.75rem; padding:4px 12px;">
+          <button class="btn-subtle" onclick="createDNACapsule()" style="font-size:0.8rem; padding:6px 14px;">
             💾 Create System DNA Capsule
           </button>
-          <button class="btn-success" onclick="resurrectFromCapsule()" style="font-size:0.75rem; padding:4px 12px;">
+          <button class="btn-success" onclick="resurrectFromCapsule()" style="font-size:0.8rem; padding:6px 14px;">
             ⚡ 1-Click Bare-Metal Resurrection
           </button>
         </div>
       </div>
       <div style="display:grid; grid-template-columns: 1fr 2fr; gap:20px;">
         <div>
-          <div style="font-size:0.8rem; color:var(--text-muted); margin-bottom:6px;">IMMUTABLE CAPSULE REGISTRY:</div>
-          <div class="code-block" id="capsule-list-box" style="max-height:120px;">
+          <div style="font-size:0.8rem; font-weight:600; color:var(--text-muted); margin-bottom:8px;">IMMUTABLE CAPSULE REGISTRY:</div>
+          <div class="code-block" id="capsule-list-box" style="max-height:130px;">
             Loading capsules...
           </div>
         </div>
         <div>
-          <div style="font-size:0.8rem; color:var(--text-muted); margin-bottom:6px;">RESURRECTION & COLD-START STATUS:</div>
-          <div class="code-block" id="capsule-status-box" style="max-height:120px;">
-            System DNA preservation active. Encapsulates Codebase AST, SQLite/PG Schemas, 23,769 RAG Chunks, Agent 6 Reinforcement Learning Memory, and Cluster Topology.
+          <div style="font-size:0.8rem; font-weight:600; color:var(--text-muted); margin-bottom:8px;">RESURRECTION & COLD-START STATUS:</div>
+          <div class="code-block" id="capsule-status-box" style="max-height:130px;">
+            System DNA preservation active. Encapsulates Codebase AST, Database Schemas, 23,769 RAG Chunks, Agent 6 Q-Learning Memory, and Cluster Topology.
           </div>
         </div>
       </div>
@@ -239,49 +248,65 @@
           <span>📚 CENTRAL HYBRID RAG EXPLORER (23,769 INFOSYS ENTERPRISE CHUNKS)</span>
         </div>
         <div style="display:flex; gap:8px;">
-          <input type="text" id="rag-search-input" placeholder="Search knowledge base (e.g. connection pool exhaustion)..." style="background:#030712; color:#fff; border:1px solid #374151; padding:6px 12px; border-radius:4px; width:340px; font-size:0.8rem;">
-          <button onclick="searchRAG()">Search</button>
+          <input type="text" id="rag-search-input" placeholder="Search knowledge base (e.g. connection pool exhaustion)..." style="background:#FFFFFF; color:var(--text-main); border:1px solid var(--border-color); padding:8px 16px; border-radius:var(--pill-radius); width:360px; font-size:0.82rem; outline:none;">
+          <button class="btn-primary" onclick="searchRAG()">Search</button>
         </div>
       </div>
-      <div id="rag-results-container" style="display:grid; grid-template-columns: repeat(3, 1fr); gap:12px;">
-        <!-- RAG search hits rendered dynamically -->
-        <div class="code-block" style="max-height:140px;">
-          <strong>[Infosys-Responsible-AI-Toolkit]</strong><br>
-          <span style="color:#06b6d4;">auth_jwt.py:26-48</span> (RRF: 0.014652)<br>
+      <div id="rag-results-container" style="display:grid; grid-template-columns: repeat(3, 1fr); gap:14px;">
+        <div class="code-block" style="max-height:150px;">
+          <strong style="color:#60A5FA;">[Infosys-Responsible-AI-Toolkit]</strong><br>
+          <span style="color:#F472B6;">auth_jwt.py:26-48</span> (RRF: 0.014652)<br>
           Token authentication and validation exception middleware.
         </div>
-        <div class="code-block" style="max-height:140px;">
-          <strong>[Infosys-Agentic-Foundry]</strong><br>
-          <span style="color:#06b6d4;">Agent_OS_&_Skill_Agent.md</span> (RRF: 0.013556)<br>
+        <div class="code-block" style="max-height:150px;">
+          <strong style="color:#60A5FA;">[Infosys-Agentic-Foundry]</strong><br>
+          <span style="color:#F472B6;">Agent_OS_&_Skill_Agent.md</span> (RRF: 0.013556)<br>
           Human-in-the-Loop approval gate protocols.
         </div>
-        <div class="code-block" style="max-height:140px;">
-          <strong>[Server-Patching-Tool]</strong><br>
-          <span style="color:#06b6d4;">patch_executor.py</span> (RRF: 0.012984)<br>
+        <div class="code-block" style="max-height:150px;">
+          <strong style="color:#60A5FA;">[Server-Patching-Tool]</strong><br>
+          <span style="color:#F472B6;">patch_executor.py</span> (RRF: 0.012984)<br>
           Automated patch rollout, health verification, and rollback.
         </div>
       </div>
-    <!-- Panel 8: Live Real-Time Logs & Agentic Telemetry Stream -->
+    </div>
+
+    <!-- Panel 8: Live Real-Time Multi-Agent Logs & Telemetry Stream -->
     <div class="panel full-width">
       <div class="panel-header">
         <div class="panel-title">
-          <span>📡 REAL-TIME MULTI-AGENT LOG STREAM & TARGET TELEMETRY</span>
+          <span>📡 REAL-TIME MULTI-AGENT LOG STREAM & RUNTIME METRICS</span>
         </div>
         <div style="display:flex; align-items:center; gap:10px;">
-          <span style="font-size:0.75rem; color:#10b981;" id="telemetry-live-indicator">● LIVE STREAMING</span>
-          <button onclick="clearDashboardLogs()" style="padding:2px 8px; font-size:0.75rem;">Clear Logs</button>
+          <span style="font-size:0.75rem; font-weight:700; color:var(--status-healthy);" id="telemetry-live-indicator">● LIVE STREAMING</span>
+          <button class="btn-subtle" onclick="clearDashboardLogs()" style="padding:4px 12px; font-size:0.75rem;">Clear Logs</button>
         </div>
       </div>
-      <div style="display:grid; grid-template-columns: 2fr 1fr; gap:16px;">
+
+      <!-- Agent Log Filter Bar -->
+      <div class="log-stream-header">
+        <div class="log-filters" id="agent-filters-container">
+          <button class="filter-pill active" onclick="setLogFilter('all')">All Stream (250)</button>
+          <button class="filter-pill" onclick="setLogFilter('agent_1_rca')">🕵️ Agent 1 RCA</button>
+          <button class="filter-pill" onclick="setLogFilter('agent_2_topology')">🌐 Agent 2 Topology</button>
+          <button class="filter-pill" onclick="setLogFilter('agent_3_planner')">📋 Agent 3 Planner</button>
+          <button class="filter-pill" onclick="setLogFilter('agent_4_executor')">⚡ Agent 4 Executor</button>
+          <button class="filter-pill" onclick="setLogFilter('agent_5_guardian')">🛡️ Agent 5 Guardian</button>
+          <button class="filter-pill" onclick="setLogFilter('agent_6_evo')">🧠 Agent 6 EVO</button>
+          <button class="filter-pill" onclick="setLogFilter('umbrella_sdk')">📡 SDK Telemetry</button>
+        </div>
+      </div>
+
+      <div style="display:grid; grid-template-columns: 2fr 1fr; gap:18px;">
         <div>
-          <div style="font-size:0.8rem; color:var(--text-muted); margin-bottom:6px;">COUNCIL & EXCEPTION LOGS (FIFO BUFFER):</div>
-          <div class="code-block" id="live-logs-container" style="max-height:220px; overflow-y:auto;">
-            [INIT] Project UMBRELLA Mission Control log listener active...
+          <div style="font-size:0.8rem; font-weight:600; color:var(--text-muted); margin-bottom:8px;">COUNCIL & EXCEPTION RUNTIME STREAM:</div>
+          <div class="live-logs-box" id="live-logs-container">
+            <!-- Dynamic multi-agent runtime logs injected by app.js -->
           </div>
         </div>
         <div>
-          <div style="font-size:0.8rem; color:var(--text-muted); margin-bottom:6px;">CONNECTED EXTERNAL SERVICES & CLIENTS:</div>
-          <div class="code-block" id="connected-services-container" style="max-height:220px; overflow-y:auto;">
+          <div style="font-size:0.8rem; font-weight:600; color:var(--text-muted); margin-bottom:8px;">CONNECTED EXTERNAL SERVICES & CLIENTS:</div>
+          <div class="code-block" id="connected-services-container" style="max-height:280px; overflow-y:auto; background:#F8FAFC; color:var(--text-main); border-color:var(--border-color);">
             No external microservices registered yet. Connect via umbrella_sdk.
           </div>
         </div>

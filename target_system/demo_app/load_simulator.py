@@ -15,7 +15,7 @@ from typing import Dict, Any, List
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..")))
 
 import target_system.demo_app.config as config
-from target_system.demo_app.database import SessionLocal, init_db
+import target_system.demo_app.database as database
 from target_system.demo_app.models import Room, Booking, RentPayment
 
 
@@ -24,7 +24,7 @@ def simulate_single_tenant_transaction(tenant_id: int) -> Dict[str, Any]:
     start_time = time.time()
     db = None
     try:
-        db = SessionLocal()
+        db = database.SessionLocal()
         # Force checkout of a raw connection from the QueuePool
         conn = db.connection()
         # Simulate payment gateway lock / processing delay (1.4 seconds > 1.0s pool timeout)
@@ -157,7 +157,9 @@ def simulate_slow_query_transaction(tenant_id: int) -> Dict[str, Any]:
 
 def run_concurrency_stress_test(num_users: int = 10, scenario: str = "pool_starvation") -> Dict[str, Any]:
     """Runs concurrent load test under the selected scenario and returns comprehensive metrics."""
-    init_db()  # Ensure tables exist
+    import importlib
+    importlib.reload(config)
+    database.init_db()  # Ensure tables exist and pool matches current config
     results: List[Dict[str, Any]] = []
     wall_start = time.time()
 

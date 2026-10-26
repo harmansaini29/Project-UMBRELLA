@@ -58,6 +58,12 @@ class TestCaseStudies10Of10(unittest.TestCase):
             c = c.replace('MAX_OVERFLOW = 5', 'MAX_OVERFLOW = 0')
             with open(cfg_p, "w", encoding="utf-8") as f:
                 f.write(c)
+        import importlib
+        if "target_system.demo_app.config" in sys.modules:
+            importlib.reload(sys.modules["target_system.demo_app.config"])
+        if "target_system.demo_app.database" in sys.modules:
+            importlib.reload(sys.modules["target_system.demo_app.database"])
+            sys.modules["target_system.demo_app.database"].init_db()
 
     # --------------------------------------------------------------------------
     # Case Study 1: Concurrency Spike & 10 Simultaneous Payments (QueuePool Starvation)
@@ -371,6 +377,18 @@ class TestCaseStudies10Of10(unittest.TestCase):
         print("\n" + "=" * 80)
         print(f"CASE STUDIES MASTER VERIFICATION SCORE: {cls.results_score}/10 PASSED (100% SUCCESS)")
         print("=" * 80)
+        # Restore git baseline so repository remains pristine
+        cfg_p = os.path.join(WORKSPACE_DIR, "target_system", "demo_app", "config.py")
+        if os.path.exists(cfg_p):
+            with open(cfg_p, "w", encoding="utf-8") as f:
+                f.write(
+                    'import os\n'
+                    'DATABASE_URL = os.environ.get("DEMO_DATABASE_URL", "sqlite:///./demo_booking_db.sqlite")\n'
+                    'POOL_SIZE = int(os.environ.get("DEMO_POOL_SIZE", "10"))\n'
+                    'MAX_OVERFLOW = int(os.environ.get("DEMO_MAX_OVERFLOW", "5"))\n'
+                    'POOL_TIMEOUT = float(os.environ.get("DEMO_POOL_TIMEOUT", "1.0"))\n'
+                    'SERVICE_PORT = int(os.environ.get("DEMO_SERVICE_PORT", "8002"))\n'
+                )
 
 
 if __name__ == "__main__":

@@ -16,6 +16,11 @@ SessionLocal = None
 
 def init_db():
     global engine, SessionLocal
+    if engine is not None:
+        try:
+            engine.dispose()
+        except Exception:
+            pass
     engine = create_engine(
         config.DATABASE_URL,
         poolclass=QueuePool,

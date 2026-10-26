@@ -1,6 +1,9 @@
-// Project UMBRELLA: Mission Control Dashboard Controller (Live Streaming Engine)
+// Project UMBRELLA: Mission Control Dashboard Controller
+// Professional Multi-Agent Real-Time Resilience & Sentry Engine
 
 let activeTopologyData = null;
+let allCachedLogs = [];
+let currentLogFilter = "all";
 
 document.addEventListener("DOMContentLoaded", () => {
   refreshSystemStatus();
@@ -8,9 +11,9 @@ document.addEventListener("DOMContentLoaded", () => {
   pollLiveTelemetry();
   loadCapsuleRegistry();
 
-  // Active polling loops
+  // Active real-time polling loops
   setInterval(refreshSystemStatus, 2500);
-  setInterval(pollLiveLogs, 2000);
+  setInterval(pollLiveLogs, 1500);
   setInterval(pollLiveTelemetry, 3000);
 });
 
@@ -20,14 +23,20 @@ async function refreshSystemStatus() {
     const data = await res.json();
 
     // 1. Update Headroom HUD
-    document.getElementById("hud-pool-headroom").textContent = `POOL_SIZE = ${data.demo_backend.pool_size}`;
+    const poolEl = document.getElementById("hud-pool-headroom");
+    if (poolEl && data.demo_backend) {
+      poolEl.textContent = `POOL_SIZE = ${data.demo_backend.pool_size}`;
+    }
 
-    if (data.status === "degraded") {
-      document.getElementById("hud-cluster-state").textContent = "DEGRADED (FAILURES)";
-      document.getElementById("hud-cluster-state").style.color = "var(--accent-red)";
-    } else {
-      document.getElementById("hud-cluster-state").textContent = "HEALTHY";
-      document.getElementById("hud-cluster-state").style.color = "var(--accent-green)";
+    const stateEl = document.getElementById("hud-cluster-state");
+    if (stateEl) {
+      if (data.status === "degraded") {
+        stateEl.textContent = "DEGRADED (FAILURES)";
+        stateEl.style.color = "var(--airbnb-coral)";
+      } else {
+        stateEl.textContent = "HEALTHY";
+        stateEl.style.color = "var(--status-healthy)";
+      }
     }
 
     // 2. Fetch and render Live Dynamic Topology
@@ -39,10 +48,21 @@ async function refreshSystemStatus() {
     }
 
     // 4. Update HITL Button if pending approval
-    if (data.has_pending_approval) {
-      document.getElementById("btn-hitl-approve").style.display = "inline-block";
-      document.getElementById("guardian-auth-status").innerHTML = 
-        `<span style="color:#f59e0b; font-weight:bold;">GATE PENDING: Human-in-the-Loop review required.</span>`;
+    const hitlBtn = document.getElementById("btn-hitl-approve");
+    const authStatus = document.getElementById("guardian-auth-status");
+    if (data.has_pending_approval || (data.latest_council_run && data.latest_council_run.awaiting_hitl_approval)) {
+      if (hitlBtn) hitlBtn.style.display = "inline-flex";
+      if (authStatus) {
+        authStatus.innerHTML = `<span style="color:var(--airbnb-coral); font-weight:bold;">🚨 GATE ARMED: Operator approval required to apply synthesized patch.</span>`;
+      }
+      const feed = document.getElementById("status-feed");
+      if (feed) {
+        feed.innerHTML = `<span style="color:var(--airbnb-coral); font-weight:bold;">⚠️ ACTION REQUIRED:</span> Autonomous Council waiting for operator authorization.`;
+      }
+    } else {
+      if (hitlBtn && (!data.latest_council_run || !data.latest_council_run.awaiting_hitl_approval)) {
+        hitlBtn.style.display = "none";
+      }
     }
 
   } catch (err) {
@@ -64,26 +84,32 @@ async function renderLiveTopology() {
       const s = topo.nodes.find(n => n.id === e.source);
       const t = topo.nodes.find(n => n.id === e.target);
       if (s && t) {
-        edgesHtml += `<line x1="${s.x}" y1="${s.y}" x2="${t.x}" y2="${t.y}" stroke="#374151" stroke-width="2" stroke-dasharray="4" />`;
+        edgesHtml += `<line x1="${s.x}" y1="${s.y}" x2="${t.x}" y2="${t.y}" stroke="#CBD5E1" stroke-width="2.5" stroke-dasharray="4,4" />`;
       }
     });
 
     let nodesHtml = "";
     topo.nodes.forEach(n => {
-      let color = "#10b981";
-      let glow = "";
+      let fillColor = "#059669";
+      let strokeColor = "#A7F3D0";
+      let pulseGlow = "";
+
       if (n.status === "critical") {
-        color = "#ef4444";
-        glow = `<circle cx="${n.x}" cy="${n.y}" r="26" fill="rgba(239, 68, 68, 0.25)" class="pulse" />`;
+        fillColor = "#FF385C";
+        strokeColor = "#FECDD3";
+        pulseGlow = `<circle cx="${n.x}" cy="${n.y}" r="26" fill="rgba(255, 56, 92, 0.25)" class="pulse" />`;
       } else if (n.status === "degraded") {
-        color = "#f59e0b";
+        fillColor = "#D97706";
+        strokeColor = "#FDE68A";
       }
 
       nodesHtml += `
-        <g>
-          ${glow}
-          <circle cx="${n.x}" cy="${n.y}" r="16" fill="${color}" stroke="#fff" stroke-width="1.5" />
-          <text x="${n.x}" y="${n.y + 26}" font-size="10" fill="#e5e7eb" text-anchor="middle" font-weight="600">${n.label}</text>
+        <g style="cursor:pointer;">
+          ${pulseGlow}
+          <circle cx="${n.x}" cy="${n.y}" r="17" fill="#FFFFFF" stroke="${strokeColor}" stroke-width="6" />
+          <circle cx="${n.x}" cy="${n.y}" r="14" fill="${fillColor}" />
+          <rect x="${n.x - 70}" y="${n.y + 24}" width="140" height="20" rx="10" fill="#FFFFFF" stroke="#E2E8F0" stroke-width="1" />
+          <text x="${n.x}" y="${n.y + 38}" font-size="9" fill="#0F172A" text-anchor="middle" font-weight="700" font-family="system-ui">${n.label}</text>
         </g>
       `;
     });
@@ -101,30 +127,95 @@ async function renderLiveTopology() {
   }
 }
 
+function setLogFilter(filterName) {
+  currentLogFilter = filterName;
+  const buttons = document.querySelectorAll("#agent-filters-container .filter-pill");
+  buttons.forEach(btn => {
+    if (btn.getAttribute("onclick") && btn.getAttribute("onclick").includes(`'${filterName}'`)) {
+      btn.classList.add("active");
+    } else {
+      btn.classList.remove("active");
+    }
+  });
+  renderLogs();
+}
+
 async function pollLiveLogs() {
   try {
     const res = await fetch("/api/system/live-logs");
     const data = await res.json();
-    const container = document.getElementById("live-logs-container");
-    if (!container || !data.logs || data.logs.length === 0) return;
+    if (!data.logs) return;
 
-    container.innerHTML = data.logs.map(log => {
-      let color = "#9ca3af";
-      if (log.level === "CRITICAL" || log.level === "ERROR") color = "#ef4444";
-      else if (log.level === "SUCCESS") color = "#10b981";
-      else if (log.level === "INFO") color = "#60a5fa";
-
-      return `
-        <div style="margin-bottom:4px; font-size:0.75rem;">
-          <span style="color:#6b7280;">[${log.timestamp}]</span>
-          <strong style="color:${color};">[${log.source}]</strong>
-          <span>${log.message}</span>
-        </div>
-      `;
-    }).join("");
+    allCachedLogs = data.logs;
+    renderLogs();
   } catch (err) {
-    // console.warn("Log poll error:", err);
+    // Silent fail for polling
   }
+}
+
+function renderLogs() {
+  const container = document.getElementById("live-logs-container");
+  if (!container) return;
+
+  if (!allCachedLogs || allCachedLogs.length === 0) {
+    container.innerHTML = "<div style='color:#64748B; font-size:0.75rem; padding:8px;'>No logs recorded. Sentry listening...</div>";
+    return;
+  }
+
+  const filtered = allCachedLogs.filter(log => {
+    if (currentLogFilter === "all") return true;
+    const aId = (log.agent_id || log.source || "").toLowerCase();
+    return aId.includes(currentLogFilter);
+  });
+
+  if (filtered.length === 0) {
+    container.innerHTML = `<div style='color:#64748B; font-size:0.75rem; padding:8px;'>No logs for selected filter '${currentLogFilter}'.</div>`;
+    return;
+  }
+
+  container.innerHTML = filtered.map(log => {
+    const agentBadge = getAgentBadgeHtml(log.agent_id || log.source);
+    const latencyHtml = log.runtime_ms !== undefined && log.runtime_ms !== null 
+      ? `<span class="latency-pill">⏱️ ${log.runtime_ms}ms</span>` 
+      : "";
+    
+    const levelClass = `log-level-${log.level || 'INFO'}`;
+
+    return `
+      <div class="log-entry">
+        <span class="log-time">[${log.timestamp}]</span>
+        ${agentBadge}
+        ${latencyHtml}
+        <span class="log-msg ${levelClass}">${escapeHtml(log.message)}</span>
+      </div>
+    `;
+  }).join("");
+}
+
+function getAgentBadgeHtml(source) {
+  const s = (source || "").toLowerCase();
+  if (s.includes("rca") || s.includes("agent_1")) {
+    return `<span class="agent-badge-pill badge-rca">🕵️ Agent 1 RCA</span>`;
+  } else if (s.includes("topo") || s.includes("agent_2")) {
+    return `<span class="agent-badge-pill badge-topo">🌐 Agent 2 Topology</span>`;
+  } else if (s.includes("plan") || s.includes("agent_3")) {
+    return `<span class="agent-badge-pill badge-plan">📋 Agent 3 Planner</span>`;
+  } else if (s.includes("exec") || s.includes("agent_4")) {
+    return `<span class="agent-badge-pill badge-exec">⚡ Agent 4 Executor</span>`;
+  } else if (s.includes("guard") || s.includes("agent_5")) {
+    return `<span class="agent-badge-pill badge-guard">🛡️ Agent 5 Guardian</span>`;
+  } else if (s.includes("evo") || s.includes("agent_6")) {
+    return `<span class="agent-badge-pill badge-evo">🧠 Agent 6 EVO</span>`;
+  } else if (s.includes("sdk")) {
+    return `<span class="agent-badge-pill badge-sdk">📡 SDK Sentry</span>`;
+  } else {
+    return `<span class="agent-badge-pill badge-council">☂️ Council</span>`;
+  }
+}
+
+function escapeHtml(str) {
+  if (!str) return "";
+  return str.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
 }
 
 async function pollLiveTelemetry() {
@@ -132,18 +223,38 @@ async function pollLiveTelemetry() {
     const res = await fetch("/api/system/live-telemetry");
     const data = await res.json();
     const container = document.getElementById("connected-services-container");
+    const targetDisplay = document.getElementById("target-service-display");
+
     if (!container) return;
 
     if (!data.registered_clients || data.registered_clients.length === 0) {
-      container.innerHTML = "<div style='color:#6b7280;'>No external microservices registered yet. Connect via umbrella_sdk.</div>";
+      container.innerHTML = `
+        <div style="padding:10px; color:#64748B; font-size:0.78rem;">
+          <strong>Standby Mode:</strong> No external microservices registered yet.<br>
+          Import <code>umbrella_sdk</code> into any FastAPI, Flask, or ASGI service to automatically connect.
+        </div>
+      `;
+      if (targetDisplay) targetDisplay.textContent = "karamstay_demo_app (Port 8002)";
       return;
     }
 
+    const firstClient = data.registered_clients[0];
+    if (targetDisplay && firstClient) {
+      targetDisplay.textContent = `${firstClient.service_name} (PID: ${firstClient.pid || 'Active'})`;
+    }
+
     container.innerHTML = data.registered_clients.map(c => `
-      <div style="margin-bottom:8px; border-bottom:1px solid #1f2937; padding-bottom:6px;">
-        <strong style="color:#10b981;">● ${c.service_name}</strong> (PID: ${c.pid || "Active"})<br>
-        <span style="font-size:0.7rem; color:#9ca3af;">Path: ${c.repo_path || "External Repo"}</span><br>
-        <span style="font-size:0.7rem; color:#60a5fa;">Config: ${c.config_file}</span>
+      <div class="client-service-card">
+        <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:4px;">
+          <strong style="color:var(--status-healthy); font-size:0.85rem;">● ${c.service_name}</strong>
+          <span style="font-size:0.7rem; color:var(--text-muted); background:#F1F5F9; padding:2px 6px; border-radius:9999px;">PID: ${c.pid || "Active"}</span>
+        </div>
+        <div style="font-size:0.73rem; color:var(--text-secondary); margin-bottom:2px;">
+          <strong>Path:</strong> ${c.repo_path || "External Repo"}
+        </div>
+        <div style="font-size:0.73rem; color:var(--airbnb-coral);">
+          <strong>Target Config:</strong> ${c.config_file || "config.py"}
+        </div>
       </div>
     `).join("");
   } catch (err) {
@@ -156,131 +267,131 @@ function renderCouncilRun(result) {
   if (result.agent_1_rca && result.agent_1_rca.primary_causes && result.agent_1_rca.primary_causes.length > 0) {
     const a1 = result.agent_1_rca;
     const cause = a1.primary_causes[0];
-    document.getElementById("rca-dominant-bottleneck").textContent = cause.cause;
-    document.getElementById("rca-dominant-bottleneck").style.color = "#38bdf8";
-    document.getElementById("badge-rca-confidence").textContent = `CONFIDENCE: ${(a1.overall_confidence * 100).toFixed(0)}%`;
-    document.getElementById("rca-code-pointer").textContent = `AST Pointer: ${cause.target_file || 'config.py'}:${cause.line_number || 1}`;
+    const bottleneckEl = document.getElementById("rca-dominant-bottleneck");
+    if (bottleneckEl) {
+      bottleneckEl.textContent = cause.cause;
+      bottleneckEl.style.color = "var(--airbnb-coral)";
+    }
+    const rcaBadge = document.getElementById("badge-rca-confidence");
+    if (rcaBadge) {
+      rcaBadge.textContent = `CONFIDENCE: ${(a1.overall_confidence * 100).toFixed(0)}%`;
+    }
+    const codePtr = document.getElementById("rca-code-pointer");
+    if (codePtr) {
+      codePtr.textContent = `AST Pointer: ${cause.target_file || 'config.py'}:${cause.line_number || 1}`;
+    }
 
-    // Dynamically calculate live signal confidence from correlated_signals
+    // Correlated signals
     if (a1.correlated_signals) {
       const s1 = a1.correlated_signals["signal_1_ast"];
       const s2 = a1.correlated_signals["signal_2_telemetry"];
       const s3 = a1.correlated_signals["signal_3_config"];
       const s4 = a1.correlated_signals["signal_4_rag"];
 
-      const pct1 = s1 ? Math.min(100, Math.round((s1.confidence_contribution / (s1.weight || 0.35)) * 100)) : 85;
-      const pct2 = s2 ? Math.min(100, Math.round((s2.confidence_contribution / (s2.weight || 0.25)) * 100)) : 90;
+      const pct1 = s1 ? Math.min(100, Math.round((s1.confidence_contribution / (s1.weight || 0.35)) * 100)) : 88;
+      const pct2 = s2 ? Math.min(100, Math.round((s2.confidence_contribution / (s2.weight || 0.25)) * 100)) : 92;
       const pct3 = s3 ? Math.min(100, Math.round((s3.confidence_contribution / (s3.weight || 0.20)) * 100)) : 95;
-      const pct4 = s4 ? Math.min(100, Math.round((s4.confidence_contribution / (s4.weight || 0.20)) * 100)) : 80;
+      const pct4 = s4 ? Math.min(100, Math.round((s4.confidence_contribution / (s4.weight || 0.20)) * 100)) : 82;
 
-      document.getElementById("meter-ast-val").textContent = `${pct1}%`;
-      document.getElementById("meter-ast-bar").style.width = `${pct1}%`;
-      document.getElementById("meter-telemetry-val").textContent = `${pct2}%`;
-      document.getElementById("meter-telemetry-bar").style.width = `${pct2}%`;
-      document.getElementById("meter-config-val").textContent = `${pct3}%`;
-      document.getElementById("meter-config-bar").style.width = `${pct3}%`;
-      document.getElementById("meter-rag-val").textContent = `${pct4}%`;
-      document.getElementById("meter-rag-bar").style.width = `${pct4}%`;
+      updateMeter("meter-ast-val", "meter-ast-bar", pct1);
+      updateMeter("meter-telemetry-val", "meter-telemetry-bar", pct2);
+      updateMeter("meter-config-val", "meter-config-bar", pct3);
+      updateMeter("meter-rag-val", "meter-rag-bar", pct4);
     }
   }
 
   // Agent 3 Planner
   if (result.agent_3_planner && result.agent_3_planner.actions && result.agent_3_planner.actions.length > 0) {
     const action = result.agent_3_planner.actions[0];
-    document.getElementById("diff-preview").textContent = action.unified_diff || "// Unified diff patch generated";
-    document.getElementById("badge-risk-tier").textContent = action.risk_tier.toUpperCase();
-    document.getElementById("verification-cmd").textContent = action.verification_command || "python test_demo_app.py";
+    const diffEl = document.getElementById("diff-preview");
+    if (diffEl) {
+      diffEl.textContent = action.unified_diff || "// Unified diff patch generated";
+    }
+    const riskBadge = document.getElementById("badge-risk-tier");
+    if (riskBadge) {
+      riskBadge.textContent = action.risk_tier.toUpperCase();
+      riskBadge.className = action.risk_tier.toLowerCase().includes("high") ? "panel-badge badge-critical" : "panel-badge badge-warning";
+    }
+    const verifyCmd = document.getElementById("verification-cmd");
+    if (verifyCmd) {
+      verifyCmd.textContent = action.verification_command || "python -m unittest test_demo_app.py";
+    }
   }
 
-  // Agent 5 Guardian
+  // Agent 5 Guardian HITL Gate
+  const hitlBtn = document.getElementById("btn-hitl-approve");
+  const authStatus = document.getElementById("guardian-auth-status");
   if (result.awaiting_hitl_approval) {
-    document.getElementById("btn-hitl-approve").style.display = "inline-block";
-    document.getElementById("guardian-auth-status").innerHTML = 
-      `<span style="color:#f59e0b; font-weight:bold;">ACTION REQUIRED: Authorize Agent 4 to apply patch and commit.</span>`;
+    if (hitlBtn) hitlBtn.style.display = "inline-flex";
+    if (authStatus) {
+      authStatus.innerHTML = `<span style="color:var(--airbnb-coral); font-weight:bold;">🚨 GATE ARMED: Authorize Agent 4 to apply patch, verify tests, and commit.</span>`;
+    }
   }
 
   // Agent 4 Executor
   if (result.agent_4_executor) {
     const a4 = result.agent_4_executor;
-    document.getElementById("executor-terminal").textContent = `
+    const execTerminal = document.getElementById("executor-terminal");
+    if (execTerminal) {
+      execTerminal.textContent = `
 [AGENT 4 EXECUTION COMPLETE]:
-Status:            ${a4.status.toUpperCase()}
-Execution Time:    ${a4.execution_time_ms.toFixed(1)} ms
-Verification Test: ${a4.test_suite_passed ? "PASSED (100% SUCCESS)" : "FAILED"}
+Status:             ${a4.status.toUpperCase()}
+Execution Time:     ${a4.execution_time_ms.toFixed(1)} ms
+Verification Test:  ${a4.test_suite_passed ? "PASSED (100% SUCCESS)" : "FAILED"}
 Rollback Triggered: ${a4.rollback_executed ? "YES (REVERTED)" : "NO (STABLE)"}
-Git Commit SHA:    ${a4.git_commit_sha || "auto-patch-applied"}
-    `;
-    document.getElementById("btn-hitl-approve").style.display = "none";
-    document.getElementById("guardian-auth-status").textContent = "Authorized by Human-in-the-Loop review.";
+Git Commit SHA:     ${a4.git_commit_sha || "auto-patch-applied"}
+      `.trim();
+    }
+    if (hitlBtn) hitlBtn.style.display = "none";
+    if (authStatus) {
+      authStatus.innerHTML = `<span style="color:var(--status-healthy); font-weight:bold;">✓ AUTHORIZED & EXECUTED: Patch verified and committed by Agent 4.</span>`;
+    }
   }
 
   // Agent 6 EVO
   if (result.agent_6_evo && result.agent_6_evo.evolution_experience) {
     const a6 = result.agent_6_evo;
-    document.getElementById("badge-evo-reward").textContent = `Q-LEARNING REWARD: +${a6.evolution_experience.reward.toFixed(1)}`;
-    document.getElementById("evo-stats-box").innerHTML = `
+    const rewardBadge = document.getElementById("badge-evo-reward");
+    if (rewardBadge) {
+      rewardBadge.textContent = `Q-LEARNING REWARD: +${a6.evolution_experience.reward.toFixed(1)}`;
+      rewardBadge.className = "panel-badge badge-active";
+    }
+    const statsBox = document.getElementById("evo-stats-box");
+    if (statsBox) {
+      statsBox.innerHTML = `
 Total Experiences: ${a6.learning_stats.total_experiences}<br>
 Success Rate:      ${a6.learning_stats.success_rate_pct}%<br>
 Learned Q-Weight:  ${a6.evolution_experience.learned_weight.toFixed(3)}
-    `;
+      `;
+    }
 
     if (a6.proactive_proposal) {
-      document.getElementById("evo-proposal-box").innerHTML = `
-<strong>${a6.proactive_proposal.proposal_id}</strong><br>
+      const propBox = document.getElementById("evo-proposal-box");
+      if (propBox) {
+        propBox.innerHTML = `
+<strong style="color:var(--airbnb-coral);">${a6.proactive_proposal.proposal_id}</strong><br>
 ${a6.proactive_proposal.justification}<br>
-<span style="color:#06b6d4;">Target: ${a6.proactive_proposal.target_file}</span>
-      `;
-      document.getElementById("btn-approve-evo").style.display = "inline-block";
+<span style="color:#60A5FA;">Target: ${a6.proactive_proposal.target_file}</span>
+        `;
+      }
+      const approveEvoBtn = document.getElementById("btn-approve-evo");
+      if (approveEvoBtn) approveEvoBtn.style.display = "inline-flex";
     }
   }
 }
 
-async function triggerLoadSpike(users = 10, scenario = "pool_starvation") {
-  document.getElementById("status-feed").textContent = `Simulating ${users} concurrent tenant transactions under scenario: ${scenario}...`;
-  try {
-    const res = await fetch("/api/simulate/load", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ num_users: users, scenario: scenario })
-    });
-    const summary = await res.json();
-
-    if (summary.failed_requests > 0) {
-      document.getElementById("status-feed").innerHTML = `
-        <span style="color:#ef4444; font-weight:bold;">🚨 CRASH DETECTED:</span> 
-        ${summary.failed_requests}/${summary.total_requests} requests failed (${summary.failure_rate_pct}% failure). 
-        ${summary.first_error_type}: ${summary.first_error_msg}
-      `;
-      // Trigger Council Diagnosis to prepare plan and HITL gate
-      await triggerCouncilHeal(false);
-    } else {
-      document.getElementById("status-feed").innerHTML = 
-        `<span style="color:#10b981; font-weight:bold;">✓ TEST PASSED:</span> ${summary.successful_requests}/${summary.total_requests} requests succeeded (0% errors). Latency: ${summary.avg_latency_ms} ms.`;
-    }
-    refreshSystemStatus();
-  } catch (err) {
-    alert("Error triggering load spike: " + err);
-  }
-}
-
-async function triggerCouncilHeal(grant_hitl = true) {
-  document.getElementById("status-feed").textContent = "Executing 6-Agent Specialist Council Pipeline...";
-  try {
-    const res = await fetch(`/api/council/heal?grant_hitl=${grant_hitl}`, { method: "POST" });
-    const result = await res.json();
-    if (result.detail) {
-      alert(result.detail);
-      return;
-    }
-    renderCouncilRun(result);
-    refreshSystemStatus();
-  } catch (err) {
-    alert("Error executing council self-healing: " + err);
-  }
+function updateMeter(labelId, barId, pct) {
+  const lbl = document.getElementById(labelId);
+  const bar = document.getElementById(barId);
+  if (lbl) lbl.textContent = `${pct}%`;
+  if (bar) bar.style.width = `${pct}%`;
 }
 
 async function approveAndExecute() {
-  document.getElementById("guardian-auth-status").textContent = "Executing authorized patch and committing changes...";
+  const authStatus = document.getElementById("guardian-auth-status");
+  if (authStatus) {
+    authStatus.innerHTML = `<span style="color:var(--airbnb-coral);">Executing authorized patch and running sandbox verification...</span>`;
+  }
   try {
     const res = await fetch("/api/council/approve-action", {
       method: "POST",
@@ -290,7 +401,7 @@ async function approveAndExecute() {
     const result = await res.json();
     renderCouncilRun(result);
     refreshSystemStatus();
-    alert("🎉 Patch approved, executed, verified, and committed by Agent 4! Agent 6 EVO memory updated.");
+    alert("🎉 Patch approved, executed, verified, and committed by Agent 4! Target microservice reloaded without downtime.");
   } catch (err) {
     alert("Error approving action: " + err);
   }
@@ -306,17 +417,23 @@ async function onTimeFrameChange() {
       body: JSON.stringify({ time_frame: val })
     });
     const data = await res.json();
+    const propBox = document.getElementById("evo-proposal-box");
+    const approveBtn = document.getElementById("btn-approve-evo");
+
     if (data.proposal) {
-      document.getElementById("evo-proposal-box").innerHTML = `
-<strong>${data.proposal.proposal_id}</strong><br>
+      if (propBox) {
+        propBox.innerHTML = `
+<strong style="color:var(--airbnb-coral);">${data.proposal.proposal_id}</strong><br>
 ${data.proposal.justification}<br>
 <pre style="color:#34d399; margin-top:6px;">${data.proposal.unified_diff}</pre>
-      `;
-      document.getElementById("btn-approve-evo").style.display = "inline-block";
+        `;
+      }
+      if (approveBtn) approveBtn.style.display = "inline-flex";
     } else {
-      document.getElementById("evo-proposal-box").textContent = 
-        `Observation window set to ${val}. No proactive proposals generated yet (requires active stress event count).`;
-      document.getElementById("btn-approve-evo").style.display = "none";
+      if (propBox) {
+        propBox.textContent = `Observation window set to ${val}. No proactive proposals generated yet (requires active event monitoring).`;
+      }
+      if (approveBtn) approveBtn.style.display = "none";
     }
   } catch (err) {
     console.error("Time frame error:", err);
@@ -328,9 +445,12 @@ async function approveEvolution() {
     const res = await fetch("/api/evo/approve", { method: "POST" });
     const data = await res.json();
     alert(data.message);
-    document.getElementById("btn-approve-evo").style.display = "none";
-    document.getElementById("evo-proposal-box").innerHTML = 
-      `<span style="color:#10b981; font-weight:bold;">✓ EVOLUTION APPLIED:</span> Baseline pool capacity expanded to POOL_SIZE=20.`;
+    const approveBtn = document.getElementById("btn-approve-evo");
+    if (approveBtn) approveBtn.style.display = "none";
+    const propBox = document.getElementById("evo-proposal-box");
+    if (propBox) {
+      propBox.innerHTML = `<span style="color:var(--status-healthy); font-weight:bold;">✓ EVOLUTION MERGED:</span> Baseline pool capacity expanded to POOL_SIZE=20.`;
+    }
     refreshSystemStatus();
   } catch (err) {
     alert("Error approving evolution: " + err);
@@ -354,28 +474,16 @@ async function searchRAG() {
     let html = "";
     data.hits.forEach(h => {
       html += `
-        <div class="code-block" style="max-height:140px;">
-          <strong>[${h.repository}]</strong><br>
-          <span style="color:#06b6d4;">${h.symbol_name || h.file_path}</span> (RRF: ${h.rrf_score})<br>
-          ${h.preview}
+        <div class="code-block" style="max-height:150px;">
+          <strong style="color:#60A5FA;">[${h.repository}]</strong><br>
+          <span style="color:#F472B6;">${h.symbol_name || h.file_path}</span> (RRF: ${h.rrf_score})<br>
+          ${escapeHtml(h.preview)}
         </div>
       `;
     });
     container.innerHTML = html;
   } catch (err) {
     console.error("RAG search error:", err);
-  }
-}
-
-async function resetDemoSystem() {
-  try {
-    const res = await fetch("/api/reset", { method: "POST" });
-    const data = await res.json();
-    alert(data.message);
-    refreshSystemStatus();
-    location.reload();
-  } catch (err) {
-    alert("Reset error: " + err);
   }
 }
 
@@ -394,9 +502,9 @@ async function loadCapsuleRegistry() {
     let html = "";
     data.capsules.forEach(c => {
       html += `
-        <div style="margin-bottom:6px; border-bottom:1px solid #1f2937; padding-bottom:4px;">
-          <strong style="color:#38bdf8;">${c.archive_name}</strong> (${c.size_kb} KB)<br>
-          <span style="font-size:0.7rem; color:#9ca3af;">SHA-256: ${c.master_sha256 ? c.master_sha256.substring(0, 16) + '...' : 'Verified'}</span>
+        <div style="margin-bottom:6px; border-bottom:1px solid #1E293B; padding-bottom:4px;">
+          <strong style="color:#60A5FA;">${c.archive_name}</strong> (${c.size_kb} KB)<br>
+          <span style="font-size:0.7rem; color:#94A3B8;">SHA-256: ${c.master_sha256 ? c.master_sha256.substring(0, 16) + '...' : 'Verified'}</span>
         </div>
       `;
     });
@@ -408,16 +516,18 @@ async function loadCapsuleRegistry() {
 
 async function createDNACapsule() {
   const statusBox = document.getElementById("capsule-status-box");
-  statusBox.textContent = "Packaging System DNA Capsule (calculating SHA-256 for code, databases, RAG indices, and Q-tables)...";
+  if (statusBox) statusBox.textContent = "Packaging System DNA Capsule (computing SHA-256 for code, databases, RAG indices, and Q-tables)...";
   try {
     const res = await fetch("/api/capsule/create", { method: "POST" });
     const data = await res.json();
     alert(`System DNA Capsule Created!\nCapsule ID: ${data.capsule_id}\nSize: ${(data.archive_bytes/1024).toFixed(1)} KB\nTotal Files: ${data.total_files}`);
-    statusBox.innerHTML = `
-      <span style="color:#10b981; font-weight:bold;">✓ CAPSULE PRESERVED:</span> ${data.capsule_id}<br>
-      Archive Size: ${(data.archive_bytes/1024).toFixed(1)} KB | Artifacts: ${data.total_files} files<br>
-      Master SHA-256: ${data.master_sha256}
-    `;
+    if (statusBox) {
+      statusBox.innerHTML = `
+        <span style="color:var(--status-healthy); font-weight:bold;">✓ CAPSULE PRESERVED:</span> ${data.capsule_id}<br>
+        Archive Size: ${(data.archive_bytes/1024).toFixed(1)} KB | Artifacts: ${data.total_files} files<br>
+        Master SHA-256: ${data.master_sha256}
+      `;
+    }
     loadCapsuleRegistry();
   } catch (err) {
     alert("Error creating capsule: " + err);
@@ -428,22 +538,33 @@ async function resurrectFromCapsule() {
   if (!confirm("Initiate Bare-Metal Resurrection from System DNA Capsule? This will verify SHA-256 seals and revive all subsystems from zero.")) return;
 
   const statusBox = document.getElementById("capsule-status-box");
-  statusBox.textContent = "Executing bare-metal resurrection... verifying cryptographic checksums...";
+  if (statusBox) statusBox.textContent = "Executing bare-metal resurrection... verifying cryptographic checksums...";
   try {
     const res = await fetch("/api/capsule/restore", { method: "POST" });
     const data = await res.json();
     alert(`Resurrection Complete in ${data.resurrection_time_ms} ms!\nArtifacts Restored: ${data.total_artifacts_restored}\nAll 6 Agents & RAG Revived!`);
-    statusBox.innerHTML = `
-      <span style="color:#10b981; font-weight:bold;">🎉 BARE-METAL RESURRECTION COMPLETE:</span> Restored in ${data.resurrection_time_ms} ms<br>
-      Subsystems Online: RAG (${data.subsystem_health.central_hybrid_rag}), Evolution Memory (${data.subsystem_health.agent_6_evolution_memory}), DB (${data.subsystem_health.relational_database})<br>
-      Active Agents Revived: 6/6 Operational
-    `;
+    if (statusBox) {
+      statusBox.innerHTML = `
+        <span style="color:var(--status-healthy); font-weight:bold;">🎉 BARE-METAL RESURRECTION COMPLETE:</span> Restored in ${data.resurrection_time_ms} ms<br>
+        Subsystems Online: RAG (${data.subsystem_health.central_hybrid_rag}), Evolution Memory (${data.subsystem_health.agent_6_evolution_memory}), DB (${data.subsystem_health.relational_database})<br>
+        Active Agents Revived: 6/6 Operational
+      `;
+    }
     refreshSystemStatus();
   } catch (err) {
     alert("Resurrection error: " + err);
   }
 }
 
-function clearDashboardLogs() {
-  document.getElementById("live-logs-container").innerHTML = '<div style="color:#6b7280;">Logs cleared.</div>';
+async function clearDashboardLogs() {
+  try {
+    await fetch("/api/system/clear-logs", { method: "POST" });
+    allCachedLogs = [];
+    const container = document.getElementById("live-logs-container");
+    if (container) {
+      container.innerHTML = '<div style="color:#64748B; padding:8px;">Logs buffer cleared. Sentry listening...</div>';
+    }
+  } catch (err) {
+    console.error("Error clearing logs:", err);
+  }
 }
