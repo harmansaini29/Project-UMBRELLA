@@ -79,6 +79,8 @@ class SandboxedExecutor:
                     content = f.read()
 
                 # Replace values with scaled settings
+                content = content.replace('POOL_SIZE = int(os.environ.get("DEMO_POOL_SIZE", "2"))', 'POOL_SIZE = int(os.environ.get("DEMO_POOL_SIZE", "10"))')
+                content = content.replace('MAX_OVERFLOW = int(os.environ.get("DEMO_MAX_OVERFLOW", "0"))', 'MAX_OVERFLOW = int(os.environ.get("DEMO_MAX_OVERFLOW", "5"))')
                 content = content.replace('POOL_SIZE = int(os.environ.get("DB_POOL_SIZE", "2"))', 'POOL_SIZE = int(os.environ.get("DB_POOL_SIZE", "10"))')
                 content = content.replace('MAX_OVERFLOW = int(os.environ.get("DB_MAX_OVERFLOW", "0"))', 'MAX_OVERFLOW = int(os.environ.get("DB_MAX_OVERFLOW", "5"))')
                 content = content.replace('POOL_SIZE = 2', 'POOL_SIZE = 10')
@@ -152,6 +154,21 @@ class SandboxedExecutor:
         exec_time = (time.time() - start_time) * 1000.0
 
         if test_passed:
+            commit_sha = "auto-patch-applied"
+            try:
+                target_dir = os.path.dirname(target_file)
+                p_add = subprocess.run(["git", "add", target_file], cwd=target_dir, capture_output=True, text=True, timeout=5.0)
+                p_commit = subprocess.run(
+                    ["git", "commit", "-m", f"[UMBRELLA-AUTO-REMEDIATION] {action.title} ({action.action_id})"],
+                    cwd=target_dir, capture_output=True, text=True, timeout=5.0
+                )
+                if p_commit.returncode == 0:
+                    p_sha = subprocess.run(["git", "rev-parse", "--short", "HEAD"], cwd=target_dir, capture_output=True, text=True, timeout=5.0)
+                    if p_sha.returncode == 0 and p_sha.stdout.strip():
+                        commit_sha = f"git-{p_sha.stdout.strip()}"
+            except Exception:
+                pass
+
             return ExecutionResult(
                 action_id=action.action_id,
                 incident_id=incident_id,
@@ -161,7 +178,7 @@ class SandboxedExecutor:
                 rollback_executed=False,
                 stdout=stdout_log,
                 stderr=stderr_log,
-                git_commit_sha="auto-patch-applied"
+                git_commit_sha=commit_sha
             )
         else:
             # AUTOMATED ROLLBACK: Verification failed

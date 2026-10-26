@@ -71,7 +71,12 @@ class RemediationPlanner:
 
                 # Synthesize scaled config
                 new_code = old_code
-                if 'POOL_SIZE = int(os.environ.get("DB_POOL_SIZE", "2"))' in new_code:
+                if 'POOL_SIZE = int(os.environ.get("DEMO_POOL_SIZE", "2"))' in new_code:
+                    new_code = new_code.replace(
+                        'POOL_SIZE = int(os.environ.get("DEMO_POOL_SIZE", "2"))',
+                        'POOL_SIZE = int(os.environ.get("DEMO_POOL_SIZE", "10"))'
+                    )
+                elif 'POOL_SIZE = int(os.environ.get("DB_POOL_SIZE", "2"))' in new_code:
                     new_code = new_code.replace(
                         'POOL_SIZE = int(os.environ.get("DB_POOL_SIZE", "2"))',
                         'POOL_SIZE = int(os.environ.get("DB_POOL_SIZE", "10"))'
@@ -79,7 +84,12 @@ class RemediationPlanner:
                 elif 'POOL_SIZE = 2' in new_code:
                     new_code = new_code.replace('POOL_SIZE = 2', 'POOL_SIZE = 10')
 
-                if 'MAX_OVERFLOW = int(os.environ.get("DB_MAX_OVERFLOW", "0"))' in new_code:
+                if 'MAX_OVERFLOW = int(os.environ.get("DEMO_MAX_OVERFLOW", "0"))' in new_code:
+                    new_code = new_code.replace(
+                        'MAX_OVERFLOW = int(os.environ.get("DEMO_MAX_OVERFLOW", "0"))',
+                        'MAX_OVERFLOW = int(os.environ.get("DEMO_MAX_OVERFLOW", "5"))'
+                    )
+                elif 'MAX_OVERFLOW = int(os.environ.get("DB_MAX_OVERFLOW", "0"))' in new_code:
                     new_code = new_code.replace(
                         'MAX_OVERFLOW = int(os.environ.get("DB_MAX_OVERFLOW", "0"))',
                         'MAX_OVERFLOW = int(os.environ.get("DB_MAX_OVERFLOW", "5"))'
@@ -90,28 +100,36 @@ class RemediationPlanner:
                 # Fallback if already 10 (generate explicit diff)
                 if old_code == new_code:
                     new_code = (
-                        '"""\nPayment Service Configuration\nContains connection pool limits and service parameters.\n"""\n\n'
+                        '"""\nConfiguration\nContains connection pool limits and service parameters.\n"""\n\n'
                         'import os\n\n'
                         '# Connection pool settings - Scaled for high concurrent transaction throughput\n'
                         'DATABASE_URL = os.environ.get("DATABASE_URL", "sqlite:///./payment_db.sqlite")\n'
                         'POOL_SIZE = int(os.environ.get("DB_POOL_SIZE", "10"))\n'
                         'MAX_OVERFLOW = int(os.environ.get("DB_MAX_OVERFLOW", "5"))\n'
                         'POOL_TIMEOUT = float(os.environ.get("DB_POOL_TIMEOUT", "1.0"))\n'
-                        'SERVICE_PORT = int(os.environ.get("PAYMENT_SERVICE_PORT", "8001"))\n'
+                        'SERVICE_PORT = int(os.environ.get("SERVICE_PORT", "8001"))\n'
                     )
 
             unified_diff = self._generate_diff(old_code, new_code, target_file)
             rollback_diff = self._generate_diff(new_code, old_code, target_file)
 
+            # Determine appropriate post-remediation verification test
+            if "Umbrella-demo-app" in target_abs:
+                v_cmd = f"python \"{os.path.join(os.path.dirname(target_abs), 'test_demo_app.py')}\""
+            elif "demo_app" in target_abs:
+                v_cmd = "python target_system/demo_app/load_simulator.py --users 10"
+            else:
+                v_cmd = "python tools/test_payment_concurrency.py"
+
             action = RemediationAction(
                 action_id="ACT-POOL-SCALE-001",
                 title="Scale Database Connection Pool Allocation",
-                description="Increase DB_POOL_SIZE from 2 to 10 and MAX_OVERFLOW from 0 to 5 to handle concurrent inflows.",
+                description="Increase POOL_SIZE from 2 to 10 and MAX_OVERFLOW from 0 to 5 to handle concurrent inflows.",
                 risk_tier=ActionRiskTier.TIER_2_CONFIG_RESTART,
                 target_file=target_file,
                 unified_diff=unified_diff,
                 rollback_diff=rollback_diff,
-                verification_command="python tools/test_payment_concurrency.py",
+                verification_command=v_cmd,
                 estimated_recovery_time_s=3.5
             )
             actions.append(action)

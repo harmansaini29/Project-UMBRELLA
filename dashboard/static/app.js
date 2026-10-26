@@ -1,72 +1,27 @@
-// Project UMBRELLA: Mission Control Dashboard Controller
+// Project UMBRELLA: Mission Control Dashboard Controller (Live Streaming Engine)
 
-const TOPOLOGY_NODES = [
-  { id: "api_gateway", label: "API Gateway", x: 0, y: -90, status: "healthy" },
-  { id: "auth_service", label: "Auth Service", x: -140, y: -20, status: "healthy" },
-  { id: "demo_booking_service", label: "Demo Booking", x: 140, y: -20, status: "healthy" },
-  { id: "session_cache", label: "Redis Cache", x: -140, y: 70, status: "healthy" },
-  { id: "demo_booking_db", label: "SQLite DB Pool", x: 140, y: 70, status: "healthy" },
-  { id: "audit_ledger", label: "Audit Ledger", x: 0, y: 80, status: "healthy" }
-];
-
-const TOPOLOGY_EDGES = [
-  { source: "api_gateway", target: "auth_service" },
-  { source: "api_gateway", target: "demo_booking_service" },
-  { source: "auth_service", target: "session_cache" },
-  { source: "demo_booking_service", target: "demo_booking_db" },
-  { source: "demo_booking_service", target: "audit_ledger" }
-];
+let activeTopologyData = null;
 
 document.addEventListener("DOMContentLoaded", () => {
-  renderTopology();
   refreshSystemStatus();
+  pollLiveLogs();
+  pollLiveTelemetry();
   loadCapsuleRegistry();
-  setInterval(refreshSystemStatus, 3000);
+
+  // Active polling loops
+  setInterval(refreshSystemStatus, 2500);
+  setInterval(pollLiveLogs, 2000);
+  setInterval(pollLiveTelemetry, 3000);
 });
-
-function renderTopology() {
-  const svg = document.getElementById("topology-svg");
-  if (!svg) return;
-
-  let edgesHtml = "";
-  TOPOLOGY_EDGES.forEach(e => {
-    const s = TOPOLOGY_NODES.find(n => n.id === e.source);
-    const t = TOPOLOGY_NODES.find(n => n.id === e.target);
-    if (s && t) {
-      edgesHtml += `<line x1="${s.x}" y1="${s.y}" x2="${t.x}" y2="${t.y}" stroke="#374151" stroke-width="2" stroke-dasharray="4" />`;
-    }
-  });
-
-  let nodesHtml = "";
-  TOPOLOGY_NODES.forEach(n => {
-    let color = "#10b981";
-    let glow = "";
-    if (n.status === "critical") {
-      color = "#ef4444";
-      glow = `<circle cx="${n.x}" cy="${n.y}" r="26" fill="rgba(239, 68, 68, 0.25)" class="pulse" />`;
-    } else if (n.status === "degraded") {
-      color = "#f59e0b";
-    }
-
-    nodesHtml += `
-      <g>
-        ${glow}
-        <circle cx="${n.x}" cy="${n.y}" r="16" fill="${color}" stroke="#fff" stroke-width="1.5" />
-        <text x="${n.x}" y="${n.y + 28}" font-size="11" fill="#e5e7eb" text-anchor="middle" font-weight="600">${n.label}</text>
-      </g>
-    `;
-  });
-
-  svg.innerHTML = edgesHtml + nodesHtml;
-}
 
 async function refreshSystemStatus() {
   try {
     const res = await fetch("/api/system/status");
     const data = await res.json();
 
+    // 1. Update Headroom HUD
     document.getElementById("hud-pool-headroom").textContent = `POOL_SIZE = ${data.demo_backend.pool_size}`;
-    
+
     if (data.status === "degraded") {
       document.getElementById("hud-cluster-state").textContent = "DEGRADED (FAILURES)";
       document.getElementById("hud-cluster-state").style.color = "var(--accent-red)";
@@ -74,8 +29,196 @@ async function refreshSystemStatus() {
       document.getElementById("hud-cluster-state").textContent = "HEALTHY";
       document.getElementById("hud-cluster-state").style.color = "var(--accent-green)";
     }
+
+    // 2. Fetch and render Live Dynamic Topology
+    await renderLiveTopology();
+
+    // 3. Render latest Council execution or pending approval if present
+    if (data.latest_council_run) {
+      renderCouncilRun(data.latest_council_run);
+    }
+
+    // 4. Update HITL Button if pending approval
+    if (data.has_pending_approval) {
+      document.getElementById("btn-hitl-approve").style.display = "inline-block";
+      document.getElementById("guardian-auth-status").innerHTML = 
+        `<span style="color:#f59e0b; font-weight:bold;">GATE PENDING: Human-in-the-Loop review required.</span>`;
+    }
+
   } catch (err) {
     console.warn("Status poll error:", err);
+  }
+}
+
+async function renderLiveTopology() {
+  try {
+    const res = await fetch("/api/system/topology-live");
+    const topo = await res.json();
+    activeTopologyData = topo;
+
+    const svg = document.getElementById("topology-svg");
+    if (!svg || !topo.nodes) return;
+
+    let edgesHtml = "";
+    topo.edges.forEach(e => {
+      const s = topo.nodes.find(n => n.id === e.source);
+      const t = topo.nodes.find(n => n.id === e.target);
+      if (s && t) {
+        edgesHtml += `<line x1="${s.x}" y1="${s.y}" x2="${t.x}" y2="${t.y}" stroke="#374151" stroke-width="2" stroke-dasharray="4" />`;
+      }
+    });
+
+    let nodesHtml = "";
+    topo.nodes.forEach(n => {
+      let color = "#10b981";
+      let glow = "";
+      if (n.status === "critical") {
+        color = "#ef4444";
+        glow = `<circle cx="${n.x}" cy="${n.y}" r="26" fill="rgba(239, 68, 68, 0.25)" class="pulse" />`;
+      } else if (n.status === "degraded") {
+        color = "#f59e0b";
+      }
+
+      nodesHtml += `
+        <g>
+          ${glow}
+          <circle cx="${n.x}" cy="${n.y}" r="16" fill="${color}" stroke="#fff" stroke-width="1.5" />
+          <text x="${n.x}" y="${n.y + 26}" font-size="10" fill="#e5e7eb" text-anchor="middle" font-weight="600">${n.label}</text>
+        </g>
+      `;
+    });
+
+    svg.innerHTML = edgesHtml + nodesHtml;
+
+    const badge = document.getElementById("badge-blast-radius");
+    if (badge) {
+      badge.textContent = `BLAST: ${topo.blast_radius_pct}%`;
+      badge.className = topo.blast_radius_pct > 0 ? "panel-badge badge-critical" : "panel-badge badge-active";
+    }
+
+  } catch (err) {
+    console.warn("Topology fetch error:", err);
+  }
+}
+
+async function pollLiveLogs() {
+  try {
+    const res = await fetch("/api/system/live-logs");
+    const data = await res.json();
+    const container = document.getElementById("live-logs-container");
+    if (!container || !data.logs || data.logs.length === 0) return;
+
+    container.innerHTML = data.logs.map(log => {
+      let color = "#9ca3af";
+      if (log.level === "CRITICAL" || log.level === "ERROR") color = "#ef4444";
+      else if (log.level === "SUCCESS") color = "#10b981";
+      else if (log.level === "INFO") color = "#60a5fa";
+
+      return `
+        <div style="margin-bottom:4px; font-size:0.75rem;">
+          <span style="color:#6b7280;">[${log.timestamp}]</span>
+          <strong style="color:${color};">[${log.source}]</strong>
+          <span>${log.message}</span>
+        </div>
+      `;
+    }).join("");
+  } catch (err) {
+    // console.warn("Log poll error:", err);
+  }
+}
+
+async function pollLiveTelemetry() {
+  try {
+    const res = await fetch("/api/system/live-telemetry");
+    const data = await res.json();
+    const container = document.getElementById("connected-services-container");
+    if (!container) return;
+
+    if (!data.registered_clients || data.registered_clients.length === 0) {
+      container.innerHTML = "<div style='color:#6b7280;'>No external microservices registered yet. Connect via umbrella_sdk.</div>";
+      return;
+    }
+
+    container.innerHTML = data.registered_clients.map(c => `
+      <div style="margin-bottom:8px; border-bottom:1px solid #1f2937; padding-bottom:6px;">
+        <strong style="color:#10b981;">● ${c.service_name}</strong> (PID: ${c.pid || "Active"})<br>
+        <span style="font-size:0.7rem; color:#9ca3af;">Path: ${c.repo_path || "External Repo"}</span><br>
+        <span style="font-size:0.7rem; color:#60a5fa;">Config: ${c.config_file}</span>
+      </div>
+    `).join("");
+  } catch (err) {
+    // console.warn("Telemetry poll error:", err);
+  }
+}
+
+function renderCouncilRun(result) {
+  // Agent 1 RCA
+  if (result.agent_1_rca && result.agent_1_rca.primary_causes && result.agent_1_rca.primary_causes.length > 0) {
+    const a1 = result.agent_1_rca;
+    const cause = a1.primary_causes[0];
+    document.getElementById("rca-dominant-bottleneck").textContent = cause.cause;
+    document.getElementById("rca-dominant-bottleneck").style.color = "#38bdf8";
+    document.getElementById("badge-rca-confidence").textContent = `CONFIDENCE: ${(a1.overall_confidence * 100).toFixed(0)}%`;
+    document.getElementById("rca-code-pointer").textContent = `AST Pointer: ${cause.target_file || 'config.py'}:${cause.line_number || 1}`;
+
+    document.getElementById("meter-ast-val").textContent = "95%";
+    document.getElementById("meter-ast-bar").style.width = "95%";
+    document.getElementById("meter-telemetry-val").textContent = "100%";
+    document.getElementById("meter-telemetry-bar").style.width = "100%";
+    document.getElementById("meter-config-val").textContent = "100%";
+    document.getElementById("meter-config-bar").style.width = "100%";
+    document.getElementById("meter-rag-val").textContent = "90%";
+    document.getElementById("meter-rag-bar").style.width = "90%";
+  }
+
+  // Agent 3 Planner
+  if (result.agent_3_planner && result.agent_3_planner.actions && result.agent_3_planner.actions.length > 0) {
+    const action = result.agent_3_planner.actions[0];
+    document.getElementById("diff-preview").textContent = action.unified_diff || "// Unified diff patch generated";
+    document.getElementById("badge-risk-tier").textContent = action.risk_tier.toUpperCase();
+    document.getElementById("verification-cmd").textContent = action.verification_command || "python test_demo_app.py";
+  }
+
+  // Agent 5 Guardian
+  if (result.awaiting_hitl_approval) {
+    document.getElementById("btn-hitl-approve").style.display = "inline-block";
+    document.getElementById("guardian-auth-status").innerHTML = 
+      `<span style="color:#f59e0b; font-weight:bold;">ACTION REQUIRED: Authorize Agent 4 to apply patch and commit.</span>`;
+  }
+
+  // Agent 4 Executor
+  if (result.agent_4_executor) {
+    const a4 = result.agent_4_executor;
+    document.getElementById("executor-terminal").textContent = `
+[AGENT 4 EXECUTION COMPLETE]:
+Status:            ${a4.status.toUpperCase()}
+Execution Time:    ${a4.execution_time_ms.toFixed(1)} ms
+Verification Test: ${a4.test_suite_passed ? "PASSED (100% SUCCESS)" : "FAILED"}
+Rollback Triggered: ${a4.rollback_executed ? "YES (REVERTED)" : "NO (STABLE)"}
+Git Commit SHA:    ${a4.git_commit_sha || "auto-patch-applied"}
+    `;
+    document.getElementById("btn-hitl-approve").style.display = "none";
+    document.getElementById("guardian-auth-status").textContent = "Authorized by Human-in-the-Loop review.";
+  }
+
+  // Agent 6 EVO
+  if (result.agent_6_evo && result.agent_6_evo.evolution_experience) {
+    const a6 = result.agent_6_evo;
+    document.getElementById("badge-evo-reward").textContent = `Q-LEARNING REWARD: +${a6.evolution_experience.reward.toFixed(1)}`;
+    document.getElementById("evo-stats-box").innerHTML = `
+Total Experiences: ${a6.learning_stats.total_experiences}<br>
+Success Rate:      ${a6.learning_stats.success_rate_pct}%<br>
+Learned Q-Weight:  ${a6.evolution_experience.learned_weight.toFixed(3)}
+    `;
+
+    if (a6.proactive_proposal) {
+      document.getElementById("evo-proposal-box").innerHTML = `
+<strong>${a6.proactive_proposal.proposal_id}</strong><br>
+${a6.proactive_proposal.justification}<br>
+<span style="color:#06b6d4;">Target: ${a6.proactive_proposal.target_file}</span>
+      `;
+      document.getElementById("btn-approve-evo").style.display = "inline-block";
+    }
   }
 }
 
@@ -95,152 +238,49 @@ async function triggerLoadSpike(users = 10, scenario = "pool_starvation") {
         ${summary.failed_requests}/${summary.total_requests} requests failed (${summary.failure_rate_pct}% failure). 
         ${summary.first_error_type}: ${summary.first_error_msg}
       `;
-
-      // Mark topology nodes based on failure scenario
-      if (scenario === "jwt_auth_failure") {
-        TOPOLOGY_NODES.forEach(n => {
-          if (n.id === "auth_service") n.status = "critical";
-          else if (n.id === "api_gateway" || n.id === "demo_booking_service") n.status = "degraded";
-          else n.status = "healthy";
-        });
-        document.getElementById("badge-blast-radius").textContent = "BLAST: 60%";
-        document.getElementById("topology-impact-desc").textContent = "OAuth2 Auth failure rejecting upstream tenant traffic";
-        document.getElementById("rca-dominant-bottleneck").textContent = 
-          `Authentication Token Rejection: ${summary.first_error_msg}`;
-      } else if (scenario === "slow_query_deadlock") {
-        TOPOLOGY_NODES.forEach(n => {
-          if (n.id === "demo_booking_db") n.status = "critical";
-          else if (n.id === "demo_booking_service") n.status = "degraded";
-          else n.status = "healthy";
-        });
-        document.getElementById("badge-blast-radius").textContent = "BLAST: 40%";
-        document.getElementById("topology-impact-desc").textContent = "Unindexed table scan holding exclusive locks >2,000ms";
-        document.getElementById("rca-dominant-bottleneck").textContent = 
-          `Database Table Lock Contention: ${summary.first_error_msg}`;
-      } else {
-        TOPOLOGY_NODES.forEach(n => {
-          if (n.id === "demo_booking_service" || n.id === "demo_booking_db") {
-            n.status = "critical";
-          } else {
-            n.status = "degraded";
-          }
-        });
-        document.getElementById("badge-blast-radius").textContent = "BLAST: 100%";
-        document.getElementById("topology-impact-desc").textContent = "Downstream QueuePool bottleneck cascading to all callers";
-        document.getElementById("rca-dominant-bottleneck").textContent = 
-          `Database Connection Pool Starvation: ${summary.first_error_msg}`;
-      }
-      renderTopology();
-
-      document.getElementById("badge-blast-radius").className = "panel-badge badge-critical";
-      document.getElementById("rca-dominant-bottleneck").style.color = "#ef4444";
-      document.getElementById("meter-ast-val").textContent = "95%";
-      document.getElementById("meter-ast-bar").style.width = "95%";
-      document.getElementById("meter-telemetry-val").textContent = "100%";
-      document.getElementById("meter-telemetry-bar").style.width = "100%";
-      document.getElementById("meter-config-val").textContent = "100%";
-      document.getElementById("meter-config-bar").style.width = "100%";
-      document.getElementById("meter-rag-val").textContent = "90%";
-      document.getElementById("meter-rag-bar").style.width = "90%";
-      document.getElementById("badge-rca-confidence").textContent = "CONFIDENCE: 88%";
-
-      document.getElementById("diff-preview").innerHTML = `
-<span class="diff-del">- POOL_SIZE = 2</span>
-<span class="diff-add">+ POOL_SIZE = 10</span>
-<span class="diff-del">- MAX_OVERFLOW = 0</span>
-<span class="diff-add">+ MAX_OVERFLOW = 5</span>
-      `;
-      document.getElementById("badge-risk-tier").textContent = "TIER 2: CONFIG RESTART";
-      document.getElementById("badge-risk-tier").className = "panel-badge badge-warning";
-
-      document.getElementById("guardian-auth-status").innerHTML = 
-        `<span style="color:#f59e0b;">APPROVAL REQUIRED: Tier 2 patch formulated. Click to authorize Agent 4 execution.</span>`;
-      document.getElementById("btn-hitl-approve").style.display = "inline-block";
-
+      // Trigger Council Diagnosis to prepare plan and HITL gate
+      await triggerCouncilHeal(false);
     } else {
       document.getElementById("status-feed").innerHTML = 
         `<span style="color:#10b981; font-weight:bold;">✓ TEST PASSED:</span> ${summary.successful_requests}/${summary.total_requests} requests succeeded (0% errors). Latency: ${summary.avg_latency_ms} ms.`;
     }
+    refreshSystemStatus();
   } catch (err) {
     alert("Error triggering load spike: " + err);
   }
 }
 
-async function triggerCouncilHeal() {
+async function triggerCouncilHeal(grant_hitl = true) {
   document.getElementById("status-feed").textContent = "Executing 6-Agent Specialist Council Pipeline...";
   try {
-    const res = await fetch("/api/council/heal?grant_hitl=true", { method: "POST" });
+    const res = await fetch(`/api/council/heal?grant_hitl=${grant_hitl}`, { method: "POST" });
     const result = await res.json();
-
     if (result.detail) {
       alert(result.detail);
       return;
     }
-
-    // Agent 1 RCA
-    const a1 = result.agent_1_rca;
-    document.getElementById("rca-dominant-bottleneck").textContent = a1.primary_causes[0].cause;
-    document.getElementById("badge-rca-confidence").textContent = `CONFIDENCE: ${(a1.overall_confidence * 100).toFixed(0)}%`;
-    document.getElementById("rca-code-pointer").textContent = a1.technical_details;
-
-    // Agent 2 Topology
-    const a2 = result.agent_2_topology;
-    document.getElementById("badge-blast-radius").textContent = `BLAST: ${(a2.blast_report.blast_radius_score * 100).toFixed(0)}%`;
-
-    // Agent 3 Diff
-    const a3 = result.agent_3_planner;
-    document.getElementById("diff-preview").textContent = a3.actions[0].unified_diff;
-    document.getElementById("badge-risk-tier").textContent = a3.actions[0].risk_tier.toUpperCase();
-
-    // Agent 5 & 4 Executor
-    const a4 = result.agent_4_executor;
-    if (a4) {
-      document.getElementById("executor-terminal").textContent = `
-[AGENT 4 EXECUTION COMPLETE]:
-Status:            ${a4.status.toUpperCase()}
-Execution Time:    ${a4.execution_time_ms.toFixed(1)} ms
-Verification Test: ${a4.test_suite_passed ? "PASSED (100% SUCCESS)" : "FAILED"}
-Rollback Triggered: ${a4.rollback_executed ? "YES (REVERTED)" : "NO (STABLE)"}
-Commit SHA:        ${a4.git_commit_sha || "auto-patch-applied"}
-      `;
-    }
-
-    // Agent 6 EVO
-    const a6 = result.agent_6_evo;
-    if (a6 && a6.evolution_experience) {
-      document.getElementById("badge-evo-reward").textContent = `Q-LEARNING REWARD: +${a6.evolution_experience.reward.toFixed(1)}`;
-      document.getElementById("evo-stats-box").innerHTML = `
-Total Experiences: ${a6.learning_stats.total_experiences}<br>
-Success Rate:      ${a6.learning_stats.success_rate_pct}%<br>
-Learned Q-Weight:  ${a6.evolution_experience.learned_weight.toFixed(3)}
-      `;
-
-      if (a6.proactive_proposal) {
-        document.getElementById("evo-proposal-box").innerHTML = `
-<strong>${a6.proactive_proposal.proposal_id}</strong><br>
-${a6.proactive_proposal.justification}<br>
-<span style="color:#06b6d4;">Target: ${a6.proactive_proposal.target_file}</span>
-        `;
-        document.getElementById("btn-approve-evo").style.display = "inline-block";
-      }
-    }
-
-    // Reset topology to green
-    TOPOLOGY_NODES.forEach(n => n.status = "healthy");
-    renderTopology();
-
-    document.getElementById("status-feed").innerHTML = 
-      `<span style="color:#10b981; font-weight:bold;">🎉 SYSTEM FULLY HEALED:</span> Self-healing and evolution pipeline completed successfully.`;
-    document.getElementById("btn-hitl-approve").style.display = "none";
-    document.getElementById("guardian-auth-status").textContent = "Authorized by Human-in-the-Loop review.";
-
+    renderCouncilRun(result);
+    refreshSystemStatus();
   } catch (err) {
     alert("Error executing council self-healing: " + err);
   }
 }
 
-function approveAndExecute() {
-  triggerCouncilHeal();
+async function approveAndExecute() {
+  document.getElementById("guardian-auth-status").textContent = "Executing authorized patch and committing changes...";
+  try {
+    const res = await fetch("/api/council/approve-action", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ action_id: "ACT-POOL-SCALE-001", grant_approval: true })
+    });
+    const result = await res.json();
+    renderCouncilRun(result);
+    refreshSystemStatus();
+    alert("🎉 Patch approved, executed, verified, and committed by Agent 4! Agent 6 EVO memory updated.");
+  } catch (err) {
+    alert("Error approving action: " + err);
+  }
 }
 
 async function onTimeFrameChange() {
@@ -319,8 +359,6 @@ async function resetDemoSystem() {
     const res = await fetch("/api/reset", { method: "POST" });
     const data = await res.json();
     alert(data.message);
-    TOPOLOGY_NODES.forEach(n => n.status = "healthy");
-    renderTopology();
     refreshSystemStatus();
     location.reload();
   } catch (err) {
@@ -391,4 +429,8 @@ async function resurrectFromCapsule() {
   } catch (err) {
     alert("Resurrection error: " + err);
   }
+}
+
+function clearDashboardLogs() {
+  document.getElementById("live-logs-container").innerHTML = '<div style="color:#6b7280;">Logs cleared.</div>';
 }

@@ -73,11 +73,19 @@ class RootCauseAnalyzer:
 
         # Step 2: Extract target service config state
         config_data: Dict[str, Any] = {}
-        # Try inspecting config.py if payment service or target system
-        candidate_configs = [
+        # Try inspecting config.py if payment service, demo app, or connected target system
+        candidate_configs = []
+        if primary_err and primary_err.target_file and os.path.exists(primary_err.target_file):
+            candidate_configs.append(primary_err.target_file)
+            cfg_in_dir = os.path.join(os.path.dirname(primary_err.target_file), "config.py")
+            if os.path.exists(cfg_in_dir):
+                candidate_configs.append(cfg_in_dir)
+
+        candidate_configs.extend([
+            os.path.join(os.getcwd(), "target_system", "demo_app", "config.py"),
             os.path.join(os.getcwd(), "target_system", "payment_service", "config.py"),
             os.path.join(os.getcwd(), "config", "settings.py")
-        ]
+        ])
         for cfg_path in candidate_configs:
             if os.path.exists(cfg_path):
                 cfg_ast = ASTInspector.inspect_file_at_line(cfg_path, 1)

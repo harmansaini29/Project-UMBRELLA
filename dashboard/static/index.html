@@ -261,6 +261,31 @@
           Automated patch rollout, health verification, and rollback.
         </div>
       </div>
+    <!-- Panel 8: Live Real-Time Logs & Agentic Telemetry Stream -->
+    <div class="panel full-width">
+      <div class="panel-header">
+        <div class="panel-title">
+          <span>📡 REAL-TIME MULTI-AGENT LOG STREAM & TARGET TELEMETRY</span>
+        </div>
+        <div style="display:flex; align-items:center; gap:10px;">
+          <span style="font-size:0.75rem; color:#10b981;" id="telemetry-live-indicator">● LIVE STREAMING</span>
+          <button onclick="clearDashboardLogs()" style="padding:2px 8px; font-size:0.75rem;">Clear Logs</button>
+        </div>
+      </div>
+      <div style="display:grid; grid-template-columns: 2fr 1fr; gap:16px;">
+        <div>
+          <div style="font-size:0.8rem; color:var(--text-muted); margin-bottom:6px;">COUNCIL & EXCEPTION LOGS (FIFO BUFFER):</div>
+          <div class="code-block" id="live-logs-container" style="max-height:220px; overflow-y:auto;">
+            [INIT] Project UMBRELLA Mission Control log listener active...
+          </div>
+        </div>
+        <div>
+          <div style="font-size:0.8rem; color:var(--text-muted); margin-bottom:6px;">CONNECTED EXTERNAL SERVICES & CLIENTS:</div>
+          <div class="code-block" id="connected-services-container" style="max-height:220px; overflow-y:auto;">
+            No external microservices registered yet. Connect via umbrella_sdk.
+          </div>
+        </div>
+      </div>
     </div>
 
   </div>
