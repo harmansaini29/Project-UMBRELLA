@@ -42,6 +42,20 @@ class TestFullCouncil(unittest.TestCase):
         except Exception:
             pass
 
+        evo_p = os.path.join(os.path.dirname(__file__), "..", "data", "evolution_memory.json")
+        if os.path.exists(evo_p):
+            try:
+                import json
+                with open(evo_p, "w", encoding="utf-8") as ef:
+                    json.dump({
+                        "last_updated": None,
+                        "total_experiences": 0,
+                        "q_table": {},
+                        "experiences": []
+                    }, ef, indent=2)
+            except Exception:
+                pass
+
     def test_end_to_end_self_healing_and_evolution(self):
         """Tests complete 6-Agent Council on Payment Concurrency Timeout."""
         incident = IncidentContext(

@@ -65,13 +65,22 @@ class SandboxedExecutor:
                 stderr=f"Target file not found: {target_file}"
             )
 
-        # Step 1: Create atomic file backup for rollback
+        # Step 1: Create atomic file backup for rollback and capture before_code
         backup_filename = f"{action.action_id}_{os.path.basename(target_file)}.bak"
         backup_path = os.path.join(self.backup_dir, backup_filename)
         shutil.copy2(target_file, backup_path)
 
+        before_code = action.before_code
+        if not before_code:
+            try:
+                with open(target_file, "r", encoding="utf-8") as f_pre:
+                    before_code = f_pre.read()
+            except Exception:
+                before_code = ""
+
         # Step 2: Apply Patch
         patch_applied = False
+        after_code = action.after_code or ""
         try:
             # If scaling pool size config
             if "pool" in action.action_id.lower() or "pool" in action.title.lower():
@@ -88,6 +97,7 @@ class SandboxedExecutor:
 
                 with open(target_file, "w", encoding="utf-8") as f:
                     f.write(content)
+                after_code = content
                 patch_applied = True
 
             # General unified diff application fallback
@@ -188,7 +198,11 @@ class SandboxedExecutor:
                 rollback_executed=False,
                 stdout=stdout_log,
                 stderr=stderr_log,
-                git_commit_sha=commit_sha
+                git_commit_sha=commit_sha,
+                target_file=action.target_file,
+                before_code=before_code,
+                after_code=after_code,
+                unified_diff=action.unified_diff
             )
         else:
             # AUTOMATED ROLLBACK: Verification failed
@@ -207,5 +221,9 @@ class SandboxedExecutor:
                 test_suite_passed=False,
                 rollback_executed=True,
                 stdout=stdout_log,
-                stderr=f"Verification tests failed (Return code != 0). Automatic rollback restored original state.\n{stderr_log}"
+                stderr=f"Verification tests failed (Return code != 0). Automatic rollback restored original state.\n{stderr_log}",
+                target_file=action.target_file,
+                before_code=before_code,
+                after_code=after_code,
+                unified_diff=action.unified_diff
             )

@@ -159,6 +159,9 @@ class RemediationAction(BaseModel):
     rollback_diff: Optional[str] = Field(default=None, description="Diff to revert if verification fails")
     verification_command: str = Field(default="", description="Command to execute to verify healing")
     estimated_recovery_time_s: float = Field(default=5.0)
+    before_code: Optional[str] = Field(default=None, description="Original file content before patch")
+    after_code: Optional[str] = Field(default=None, description="Proposed file content after patch")
+
 
 
 class RemediationPlan(BaseModel):
@@ -185,6 +188,10 @@ class ExecutionResult(BaseModel):
     stdout: str = Field(default="")
     stderr: str = Field(default="")
     git_commit_sha: Optional[str] = Field(default=None)
+    target_file: Optional[str] = Field(default=None, description="Path to modified code file")
+    before_code: Optional[str] = Field(default=None, description="Full previous code before modification")
+    after_code: Optional[str] = Field(default=None, description="Full proposed/applied code after modification")
+    unified_diff: Optional[str] = Field(default=None, description="Detailed unified diff of file changes")
 
 
 # ============================================================================

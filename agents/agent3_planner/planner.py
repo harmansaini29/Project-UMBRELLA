@@ -130,7 +130,9 @@ class RemediationPlanner:
                 unified_diff=unified_diff,
                 rollback_diff=rollback_diff,
                 verification_command=v_cmd,
-                estimated_recovery_time_s=3.5
+                estimated_recovery_time_s=3.5,
+                before_code=old_code,
+                after_code=new_code
             )
             actions.append(action)
 
@@ -145,7 +147,9 @@ class RemediationPlanner:
                 unified_diff="--- a/" + target_file + "\n+++ b/" + target_file + "\n@@ -1,3 +1,4 @@\n+# Fix applied by Agent 3\n",
                 rollback_diff="--- b/" + target_file + "\n+++ a/" + target_file + "\n@@ -1,4 +1,3 @@\n-# Fix applied by Agent 3\n",
                 verification_command="pytest tests/",
-                estimated_recovery_time_s=10.0
+                estimated_recovery_time_s=10.0,
+                before_code=old_code or "# Original file content\n",
+                after_code=new_code or "# Remediated file content with fix applied\n"
             )
             actions.append(action)
 

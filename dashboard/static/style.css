@@ -658,6 +658,388 @@ button:active {
   grid-column: span 2;
 }
 
+/* ==========================================================================
+   Split-Screen Cockpit Layout: Left Visualizations | Right Streaming Logs
+   ========================================================================== */
+.cockpit-layout {
+  display: grid;
+  grid-template-columns: minmax(0, 1.45fr) minmax(380px, 1fr);
+  gap: 24px;
+  align-items: start;
+  margin-top: 20px;
+}
+
+.cockpit-left {
+  display: flex;
+  flex-direction: column;
+  gap: 20px;
+  min-width: 0;
+}
+
+.cockpit-right {
+  position: sticky;
+  top: 20px;
+  max-height: calc(100vh - 40px);
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+}
+
+/* ==========================================================================
+   Profile Lightning: Glowing Multi-Agent Showcase Cards
+   ========================================================================== */
+@keyframes profile-lightning-pulse {
+  0% {
+    box-shadow: 0 0 10px var(--lightning-glow), inset 0 0 6px var(--lightning-inner);
+    border-color: var(--lightning-color);
+  }
+  50% {
+    box-shadow: 0 0 22px var(--lightning-glow), 0 0 35px var(--lightning-outer), inset 0 0 10px var(--lightning-inner);
+    border-color: var(--lightning-highlight);
+  }
+  100% {
+    box-shadow: 0 0 10px var(--lightning-glow), inset 0 0 6px var(--lightning-inner);
+    border-color: var(--lightning-color);
+  }
+}
+
+.agent-lightning-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(215px, 1fr));
+  gap: 14px;
+  margin-bottom: 4px;
+}
+
+.lightning-card {
+  position: relative;
+  background: var(--bg-card);
+  border: 1.5px solid var(--lightning-color);
+  border-radius: var(--card-radius);
+  padding: 15px;
+  box-shadow: 0 0 14px var(--lightning-glow);
+  transition: transform 0.25s ease, box-shadow 0.25s ease;
+  overflow: hidden;
+  animation: profile-lightning-pulse 3.5s infinite ease-in-out;
+}
+
+.lightning-card:hover {
+  transform: translateY(-2px);
+  box-shadow: 0 0 25px var(--lightning-glow), 0 0 40px var(--lightning-outer);
+}
+
+.lightning-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 8px;
+}
+
+.lightning-avatar {
+  width: 32px;
+  height: 32px;
+  border-radius: 8px;
+  background: var(--lightning-glow);
+  color: var(--lightning-color);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 1.1rem;
+  border: 1px solid var(--lightning-color);
+}
+
+.lightning-title {
+  font-size: 0.82rem;
+  font-weight: 800;
+  color: var(--text-main);
+  letter-spacing: -0.2px;
+}
+
+.lightning-role {
+  font-size: 0.68rem;
+  color: var(--text-muted);
+  font-weight: 600;
+  margin-top: 1px;
+}
+
+.lightning-metric {
+  font-size: 0.72rem;
+  font-weight: 700;
+  margin-top: 8px;
+  padding-top: 6px;
+  border-top: 1px solid var(--border-color-subtle);
+  color: var(--lightning-color);
+  display: flex;
+  justify-content: space-between;
+}
+
+/* Agent-Specific Lightning Accents with Staggered Pulse Wave */
+.profile-rca {
+  --lightning-color: #6366F1;
+  --lightning-glow: rgba(99, 102, 241, 0.40);
+  --lightning-outer: rgba(99, 102, 241, 0.20);
+  --lightning-inner: rgba(99, 102, 241, 0.08);
+  --lightning-highlight: #818CF8;
+  animation-delay: 0.0s;
+}
+
+.profile-topo {
+  --lightning-color: #0284C7;
+  --lightning-glow: rgba(2, 132, 199, 0.40);
+  --lightning-outer: rgba(2, 132, 199, 0.20);
+  --lightning-inner: rgba(2, 132, 199, 0.08);
+  --lightning-highlight: #38BDF8;
+  animation-delay: 0.5s;
+}
+
+.profile-plan {
+  --lightning-color: #2563EB;
+  --lightning-glow: rgba(37, 99, 235, 0.40);
+  --lightning-outer: rgba(37, 99, 235, 0.20);
+  --lightning-inner: rgba(37, 99, 235, 0.08);
+  --lightning-highlight: #60A5FA;
+  animation-delay: 1.0s;
+}
+
+.profile-exec {
+  --lightning-color: #059669;
+  --lightning-glow: rgba(5, 150, 105, 0.40);
+  --lightning-outer: rgba(5, 150, 105, 0.20);
+  --lightning-inner: rgba(5, 150, 105, 0.08);
+  --lightning-highlight: #34D399;
+  animation-delay: 1.5s;
+}
+
+.profile-guard {
+  --lightning-color: #D97706;
+  --lightning-glow: rgba(217, 119, 6, 0.40);
+  --lightning-outer: rgba(217, 119, 6, 0.20);
+  --lightning-inner: rgba(217, 119, 6, 0.08);
+  --lightning-highlight: #FBBF24;
+  animation-delay: 2.0s;
+}
+
+.profile-evo {
+  --lightning-color: #FF385C;
+  --lightning-glow: rgba(255, 56, 92, 0.40);
+  --lightning-outer: rgba(255, 56, 92, 0.20);
+  --lightning-inner: rgba(255, 56, 92, 0.08);
+  --lightning-highlight: #FDA4AF;
+  animation-delay: 2.5s;
+}
+
+.profile-sdk {
+  --lightning-color: #475569;
+  --lightning-glow: rgba(71, 85, 105, 0.40);
+  --lightning-outer: rgba(71, 85, 105, 0.20);
+  --lightning-inner: rgba(71, 85, 105, 0.08);
+  --lightning-highlight: #94A3B8;
+  animation-delay: 3.0s;
+}
+
+@keyframes profile-lightning-active {
+  0%, 100% {
+    box-shadow: 0 0 20px var(--lightning-glow), 0 0 40px var(--lightning-outer), inset 0 0 12px var(--lightning-inner);
+    border-color: var(--lightning-highlight);
+    transform: translateY(-2px);
+  }
+  50% {
+    box-shadow: 0 0 32px var(--lightning-glow), 0 0 55px var(--lightning-outer), inset 0 0 16px var(--lightning-inner);
+    border-color: #FFFFFF;
+    transform: translateY(-3px);
+  }
+}
+
+.lightning-card.is-active {
+  animation: profile-lightning-active 1.2s infinite ease-in-out !important;
+  border-width: 2px;
+}
+
+/* ==========================================================================
+   Gemini IDE-Style Side-by-Side Before/After Code Diff Viewer
+   ========================================================================== */
+.ide-diff-container {
+  background: #0D1117;
+  border: 1px solid #30363D;
+  border-radius: 12px;
+  overflow: hidden;
+  font-family: 'JetBrains Mono', monospace;
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.25);
+  margin-top: 8px;
+}
+
+.ide-tab-bar {
+  background: #161B22;
+  border-bottom: 1px solid #30363D;
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 8px 14px;
+}
+
+.ide-tab {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  background: #0D1117;
+  color: #E6EDF3;
+  padding: 4px 12px;
+  border-radius: 6px 6px 0 0;
+  border-top: 2px solid #58A6FF;
+  font-size: 0.78rem;
+  font-weight: 600;
+}
+
+.ide-view-toggle {
+  display: flex;
+  gap: 6px;
+}
+
+.ide-toggle-btn {
+  background: #21262D;
+  color: #8B949E;
+  border: 1px solid #30363D;
+  padding: 3px 10px;
+  border-radius: 6px;
+  font-size: 0.72rem;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.ide-toggle-btn.active {
+  background: #1F6FEB;
+  color: #FFFFFF;
+  border-color: #58A6FF;
+}
+
+.ide-split-panes {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  border-bottom: 1px solid #30363D;
+  max-height: 290px;
+  overflow-y: auto;
+}
+
+.ide-pane {
+  background: #0D1117;
+  color: #C9D1D9;
+  font-size: 0.76rem;
+  line-height: 1.5;
+  overflow-x: auto;
+}
+
+.ide-pane-left {
+  border-right: 1px solid #30363D;
+}
+
+.ide-pane-header {
+  background: #161B22;
+  color: #8B949E;
+  font-size: 0.7rem;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  padding: 6px 12px;
+  border-bottom: 1px solid #21262D;
+  display: flex;
+  justify-content: space-between;
+}
+
+.ide-code-body {
+  padding: 6px 0;
+}
+
+.ide-line {
+  display: flex;
+  padding: 0 4px;
+  white-space: pre;
+}
+
+.ide-line-num {
+  width: 38px;
+  min-width: 38px;
+  user-select: none;
+  color: #6E7681;
+  text-align: right;
+  padding-right: 10px;
+  border-right: 1px solid #21262D;
+  margin-right: 10px;
+}
+
+.ide-line-content {
+  flex: 1;
+}
+
+/* Gemini Line Highlighting */
+.ide-line-del {
+  background: rgba(248, 81, 73, 0.18);
+  color: #FF7B72;
+}
+
+.ide-line-del .ide-line-num {
+  background: rgba(248, 81, 73, 0.28);
+  color: #FFA198;
+}
+
+.ide-line-add {
+  background: rgba(46, 160, 67, 0.18);
+  color: #7EE787;
+}
+
+.ide-line-add .ide-line-num {
+  background: rgba(46, 160, 67, 0.28);
+  color: #AFF5B4;
+}
+
+.ide-action-bar {
+  background: #161B22;
+  padding: 10px 14px;
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+}
+
+.ide-unified-view {
+  display: none;
+  background: #0D1117;
+  color: #C9D1D9;
+  font-size: 0.76rem;
+  padding: 12px;
+  max-height: 290px;
+  overflow-y: auto;
+  line-height: 1.5;
+  border-bottom: 1px solid #30363D;
+}
+
+/* Sticky Right Column Log Terminal */
+.right-log-card {
+  background: var(--bg-card);
+  border: 1px solid var(--border-color);
+  border-radius: var(--card-radius);
+  box-shadow: var(--shadow-card);
+  padding: 20px;
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  overflow: hidden;
+}
+
+.right-log-card .live-logs-box {
+  flex: 1;
+  max-height: 520px;
+  min-height: 380px;
+  overflow-y: auto;
+}
+
+@media (max-width: 1280px) {
+  .cockpit-layout {
+    grid-template-columns: 1fr;
+  }
+  .cockpit-right {
+    position: static;
+    max-height: none;
+  }
+}
+
 @media (max-width: 1080px) {
   body {
     padding: 16px;
@@ -685,3 +1067,4 @@ button:active {
     align-items: flex-start;
   }
 }
+

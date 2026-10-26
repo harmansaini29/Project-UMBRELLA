@@ -390,6 +390,20 @@ class TestCaseStudies10Of10(unittest.TestCase):
                     'SERVICE_PORT = int(os.environ.get("DEMO_SERVICE_PORT", "8002"))\n'
                 )
 
+        evo_p = os.path.join(WORKSPACE_DIR, "data", "evolution_memory.json")
+        if os.path.exists(evo_p):
+            try:
+                import json
+                with open(evo_p, "w", encoding="utf-8") as ef:
+                    json.dump({
+                        "last_updated": None,
+                        "total_experiences": 0,
+                        "q_table": {},
+                        "experiences": []
+                    }, ef, indent=2)
+            except Exception:
+                pass
+
 
 if __name__ == "__main__":
     unittest.main()
