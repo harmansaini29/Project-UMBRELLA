@@ -28,7 +28,9 @@ def main():
 
     # Check RAG index
     rag_dir = os.path.join(ROOT_DIR, "rag", "storage")
-    if os.path.exists(os.path.join(rag_dir, "bm25_index.pkl")) and os.path.exists(os.path.join(rag_dir, "faiss_index.bin")):
+    has_bm25 = os.path.exists(os.path.join(rag_dir, "bm25.pkl")) or os.path.exists(os.path.join(rag_dir, "bm25_index.pkl"))
+    has_faiss = os.path.exists(os.path.join(rag_dir, "faiss", "vector_index.faiss")) or os.path.exists(os.path.join(rag_dir, "faiss_index.bin"))
+    if has_bm25 and has_faiss:
         print("  [OK] Central Hybrid RAG Index: 23,769 chunks loaded.")
     else:
         print("  [WARNING] RAG index files not found in rag/storage/. Run python rag/build_index.py to rebuild.")
@@ -47,8 +49,9 @@ def main():
     except Exception:
         pass
 
-    # Run uvicorn server
-    uvicorn.run(app, host="0.0.0.0", port=8000, log_level="info")
+    # Run uvicorn server (Default to 127.0.0.1 for direct clickable browser access without ERR_ADDRESS_INVALID)
+    host = os.environ.get("UMBRELLA_HOST", "127.0.0.1")
+    uvicorn.run(app, host=host, port=8000, log_level="info")
 
 
 if __name__ == "__main__":

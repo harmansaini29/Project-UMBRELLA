@@ -1,14 +1,17 @@
 {
-  "last_updated": "2026-10-26T07:41:59.237449+00:00",
-  "total_experiences": 22,
+  "last_updated": "2026-10-26T14:43:38.780033+00:00",
+  "total_experiences": 28,
   "q_table": {
     "payment_service:sqlalchemy.exc.TimeoutError": {
       "ACT-POOL-SCALE-001": 12.1357
     },
     "demo_booking_service:TimeoutError": {
-      "ACT-POOL-SCALE-001": 12.0698
+      "ACT-POOL-SCALE-001": 12.3979
     },
     "demo_booking_service:OperationalError: database table locked": {
+      "ACT-POOL-SCALE-001": 3.875
+    },
+    "demo_booking_service:HTTPException: 401 Unauthorized": {
       "ACT-POOL-SCALE-001": 3.875
     }
   },
@@ -342,6 +345,96 @@
       "reward": 12.5,
       "learned_weight": 12.135725,
       "timestamp": "2026-10-26T07:41:59.235702Z"
+    },
+    {
+      "experience_id": "EXP-0023",
+      "incident_signature": "demo_booking_service:TimeoutError",
+      "state_vector": {
+        "active_connections": 10.0,
+        "pool_size": 2.0,
+        "pool_utilization": 500.0
+      },
+      "action_signature": "ACT-POOL-SCALE-001",
+      "outcome_success": true,
+      "latency_delta_pct": -25.0,
+      "reward": 12.5,
+      "learned_weight": 12.17735,
+      "timestamp": "2026-10-26T14:39:27.843200Z"
+    },
+    {
+      "experience_id": "EXP-0024",
+      "incident_signature": "demo_booking_service:HTTPException: 401 Unauthorized",
+      "state_vector": {
+        "active_connections": 10.0,
+        "pool_size": 2.0,
+        "pool_utilization": 500.0
+      },
+      "action_signature": "ACT-POOL-SCALE-001",
+      "outcome_success": true,
+      "latency_delta_pct": -25.0,
+      "reward": 12.5,
+      "learned_weight": 3.875,
+      "timestamp": "2026-10-26T14:39:29.085949Z"
+    },
+    {
+      "experience_id": "EXP-0025",
+      "incident_signature": "demo_booking_service:TimeoutError",
+      "state_vector": {
+        "active_connections": 10.0,
+        "pool_size": 2.0,
+        "pool_utilization": 500.0
+      },
+      "action_signature": "ACT-POOL-SCALE-001",
+      "outcome_success": true,
+      "latency_delta_pct": -25.0,
+      "reward": 12.5,
+      "learned_weight": 12.25805,
+      "timestamp": "2026-10-26T14:41:17.178715Z"
+    },
+    {
+      "experience_id": "EXP-0026",
+      "incident_signature": "demo_booking_service:TimeoutError",
+      "state_vector": {
+        "active_connections": 10.0,
+        "pool_size": 2.0,
+        "pool_utilization": 500.0
+      },
+      "action_signature": "ACT-POOL-SCALE-001",
+      "outcome_success": true,
+      "latency_delta_pct": -25.0,
+      "reward": 12.5,
+      "learned_weight": 12.318575000000001,
+      "timestamp": "2026-10-26T14:41:52.901947Z"
+    },
+    {
+      "experience_id": "EXP-0027",
+      "incident_signature": "demo_booking_service:TimeoutError",
+      "state_vector": {
+        "active_connections": 10.0,
+        "pool_size": 2.0,
+        "pool_utilization": 500.0
+      },
+      "action_signature": "ACT-POOL-SCALE-001",
+      "outcome_success": true,
+      "latency_delta_pct": -25.0,
+      "reward": 12.5,
+      "learned_weight": 12.363949999999999,
+      "timestamp": "2026-10-26T14:42:34.829130Z"
+    },
+    {
+      "experience_id": "EXP-0028",
+      "incident_signature": "demo_booking_service:TimeoutError",
+      "state_vector": {
+        "active_connections": 10.0,
+        "pool_size": 2.0,
+        "pool_utilization": 500.0
+      },
+      "action_signature": "ACT-POOL-SCALE-001",
+      "outcome_success": true,
+      "latency_delta_pct": -25.0,
+      "reward": 12.5,
+      "learned_weight": 12.397924999999999,
+      "timestamp": "2026-10-26T14:43:38.777116Z"
     }
   ]
 }
