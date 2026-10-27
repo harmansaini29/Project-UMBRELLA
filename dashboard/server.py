@@ -9,6 +9,7 @@ import time
 import json
 import uuid
 import logging
+import urllib.request
 from datetime import datetime, timezone
 from typing import Dict, Any, List, Optional
 from fastapi import FastAPI, HTTPException, Body
@@ -22,7 +23,7 @@ WORKSPACE_DIR = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
 if WORKSPACE_DIR not in sys.path:
     sys.path.insert(0, WORKSPACE_DIR)
 
-from agents.schemas import IncidentContext, ErrorEvent, TelemetrySnapshot
+from agents.schemas import IncidentContext, ErrorEvent, TelemetrySnapshot, ActionRiskTier
 from agents.orchestrator import CouncilOrchestrator
 from agents.agent6_evo.config import ObservationTimeFrame, EVOConfig
 from target_system.demo_app.load_simulator import run_concurrency_stress_test
