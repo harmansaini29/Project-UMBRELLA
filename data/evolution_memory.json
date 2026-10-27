@@ -1,6 +1,99 @@
 {
-  "last_updated": null,
-  "total_experiences": 0,
-  "q_table": {},
-  "experiences": []
+  "last_updated": "2026-10-27T18:52:30.443835+00:00",
+  "total_experiences": 4,
+  "q_table": {
+    "karamstay_demo_app:TimeoutError:QueuePool": {
+      "ACT-POOL-SCALE-001": 6.0312
+    }
+  },
+  "experiences": [
+    {
+      "experience_id": "EXP-0001",
+      "incident_signature": "karamstay_demo_app:TimeoutError:QueuePool",
+      "state_vector": {
+        "active_connections": 10.0,
+        "pool_size": 2.0,
+        "pool_utilization": 500.0
+      },
+      "action_signature": "ACT-POOL-SCALE-001",
+      "outcome_success": true,
+      "latency_delta_pct": -25.0,
+      "reward": 12.5,
+      "learned_weight": 3.875,
+      "timestamp": "2026-10-27T18:51:45.307626Z"
+    },
+    {
+      "experience_id": "OUT-INC-1793127081-0001",
+      "incident_signature": "INC-1793127081",
+      "state_vector": {
+        "incident_id": "INC-1793127081",
+        "service_name": "karamstay_demo_app",
+        "error_type": "TimeoutError",
+        "error_message": "QueuePool limit reached",
+        "sub_signature": "QueuePool",
+        "active_connections": 10.0,
+        "pool_size": 2.0,
+        "pool_overflow": 0.0,
+        "pool_utilization_pct": 500.0,
+        "latency_p99_ms": 1450.0,
+        "cpu_percent": 0.0,
+        "memory_mb": 0.0,
+        "error_count_last_5m": 8.0,
+        "blast_radius_score": 0.0,
+        "impacted_nodes_count": 0,
+        "environment": "production",
+        "target_file": "config.py",
+        "line_number": 1
+      },
+      "action_signature": "ACT-POOL-SCALE-001",
+      "outcome_success": true,
+      "latency_delta_pct": -25.0,
+      "reward": 12.5,
+      "timestamp": "2026-10-27T18:51:45.309628+00:00"
+    },
+    {
+      "experience_id": "EXP-0003",
+      "incident_signature": "karamstay_demo_app:TimeoutError:QueuePool",
+      "state_vector": {
+        "active_connections": 10.0,
+        "pool_size": 2.0,
+        "pool_utilization": 500.0
+      },
+      "action_signature": "ACT-POOL-SCALE-001",
+      "outcome_success": true,
+      "latency_delta_pct": -25.0,
+      "reward": 12.5,
+      "learned_weight": 6.03125,
+      "timestamp": "2026-10-27T18:52:30.406714Z"
+    },
+    {
+      "experience_id": "OUT-INC-1793127126-0003",
+      "incident_signature": "INC-1793127126",
+      "state_vector": {
+        "incident_id": "INC-1793127126",
+        "service_name": "karamstay_demo_app",
+        "error_type": "TimeoutError",
+        "error_message": "QueuePool limit reached",
+        "sub_signature": "QueuePool",
+        "active_connections": 10.0,
+        "pool_size": 2.0,
+        "pool_overflow": 0.0,
+        "pool_utilization_pct": 500.0,
+        "latency_p99_ms": 1450.0,
+        "cpu_percent": 0.0,
+        "memory_mb": 0.0,
+        "error_count_last_5m": 8.0,
+        "blast_radius_score": 0.0,
+        "impacted_nodes_count": 0,
+        "environment": "production",
+        "target_file": "config.py",
+        "line_number": 1
+      },
+      "action_signature": "ACT-POOL-SCALE-001",
+      "outcome_success": true,
+      "latency_delta_pct": -25.0,
+      "reward": 12.5,
+      "timestamp": "2026-10-27T18:52:30.408337+00:00"
+    }
+  ]
 }
