@@ -64,6 +64,9 @@ class TestCaseStudies10Of10(unittest.TestCase):
         if "target_system.demo_app.database" in sys.modules:
             importlib.reload(sys.modules["target_system.demo_app.database"])
             sys.modules["target_system.demo_app.database"].init_db()
+        if "target_system.demo_app.load_simulator" in sys.modules:
+            importlib.reload(sys.modules["target_system.demo_app.load_simulator"])
+
 
     # --------------------------------------------------------------------------
     # Case Study 1: Concurrency Spike & 10 Simultaneous Payments (QueuePool Starvation)

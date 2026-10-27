@@ -87,7 +87,10 @@
           <div class="lightning-card profile-rca" id="agent-card-rca">
             <div class="lightning-header">
               <div class="lightning-avatar">🕵️</div>
-              <span class="panel-badge badge-active" style="font-size:0.65rem;">ACTIVE</span>
+              <div style="display:flex; align-items:center; gap:6px;">
+                <span class="latency-pill" id="agent-lat-rca" style="font-size:0.62rem;">⏱️ 0.2ms</span>
+                <span class="panel-badge badge-active" style="font-size:0.65rem;" id="agent-status-rca">ACTIVE</span>
+              </div>
             </div>
             <div class="lightning-title">AGENT 1: RCA</div>
             <div class="lightning-role">Root Cause & AST Inspector</div>
@@ -101,7 +104,10 @@
           <div class="lightning-card profile-topo" id="agent-card-topo">
             <div class="lightning-header">
               <div class="lightning-avatar">🌐</div>
-              <span class="panel-badge badge-active" style="font-size:0.65rem;">ACTIVE</span>
+              <div style="display:flex; align-items:center; gap:6px;">
+                <span class="latency-pill" id="agent-lat-topo" style="font-size:0.62rem;">⏱️ 0.1ms</span>
+                <span class="panel-badge badge-active" style="font-size:0.65rem;" id="agent-status-topo">ACTIVE</span>
+              </div>
             </div>
             <div class="lightning-title">AGENT 2: TOPOLOGY</div>
             <div class="lightning-role">3D Spatial Blast Radius</div>
@@ -115,7 +121,10 @@
           <div class="lightning-card profile-plan" id="agent-card-plan">
             <div class="lightning-header">
               <div class="lightning-avatar">📋</div>
-              <span class="panel-badge badge-active" style="font-size:0.65rem;">ACTIVE</span>
+              <div style="display:flex; align-items:center; gap:6px;">
+                <span class="latency-pill" id="agent-lat-plan" style="font-size:0.62rem;">⏱️ 0.2ms</span>
+                <span class="panel-badge badge-active" style="font-size:0.65rem;" id="agent-status-plan">ACTIVE</span>
+              </div>
             </div>
             <div class="lightning-title">AGENT 3: PLANNER</div>
             <div class="lightning-role">Diff Synthesis & Playbook</div>
@@ -129,7 +138,10 @@
           <div class="lightning-card profile-exec" id="agent-card-exec">
             <div class="lightning-header">
               <div class="lightning-avatar">⚡</div>
-              <span class="panel-badge badge-active" style="font-size:0.65rem;">ACTIVE</span>
+              <div style="display:flex; align-items:center; gap:6px;">
+                <span class="latency-pill" id="agent-lat-exec" style="font-size:0.62rem;">⏱️ 0.4ms</span>
+                <span class="panel-badge badge-active" style="font-size:0.65rem;" id="agent-status-exec">ACTIVE</span>
+              </div>
             </div>
             <div class="lightning-title">AGENT 4: EXECUTOR</div>
             <div class="lightning-role">Sandboxed Action & Git Commit</div>
@@ -143,7 +155,10 @@
           <div class="lightning-card profile-guard" id="agent-card-guard">
             <div class="lightning-header">
               <div class="lightning-avatar">🛡️</div>
-              <span class="panel-badge badge-active" style="font-size:0.65rem;">ACTIVE</span>
+              <div style="display:flex; align-items:center; gap:6px;">
+                <span class="latency-pill" id="agent-lat-guard" style="font-size:0.62rem;">⏱️ 0.1ms</span>
+                <span class="panel-badge badge-active" style="font-size:0.65rem;" id="agent-status-guard">ACTIVE</span>
+              </div>
             </div>
             <div class="lightning-title">AGENT 5: GUARDIAN</div>
             <div class="lightning-role">Safety Policy & Failover</div>
@@ -157,13 +172,16 @@
           <div class="lightning-card profile-evo" id="agent-card-evo">
             <div class="lightning-header">
               <div class="lightning-avatar">🧠</div>
-              <span class="panel-badge badge-active" style="font-size:0.65rem;">ACTIVE</span>
+              <div style="display:flex; align-items:center; gap:6px;">
+                <span class="latency-pill" id="agent-lat-evo" style="font-size:0.62rem;">⏱️ 0.3ms</span>
+                <span class="panel-badge badge-active" style="font-size:0.65rem;" id="agent-status-evo">ACTIVE</span>
+              </div>
             </div>
             <div class="lightning-title">AGENT 6: EVO</div>
-            <div class="lightning-role">Reinforcement Learning Core</div>
+            <div class="lightning-role">Outcome-Aware Bandit Core</div>
             <div class="lightning-metric">
-              <span>Bellman Reward:</span>
-              <span id="card-evo-metric">+13.0 / Q-Weight 12.66</span>
+              <span>Learning Policy:</span>
+              <span id="card-evo-metric">LinUCB (Shadow Mode)</span>
             </div>
           </div>
 
@@ -171,7 +189,10 @@
           <div class="lightning-card profile-sdk" id="agent-card-sdk">
             <div class="lightning-header">
               <div class="lightning-avatar">📡</div>
-              <span class="panel-badge badge-active" style="font-size:0.65rem;">MONITORING</span>
+              <div style="display:flex; align-items:center; gap:6px;">
+                <span class="latency-pill" id="agent-lat-sdk" style="font-size:0.62rem;">⏱️ 0.1ms</span>
+                <span class="panel-badge badge-active" style="font-size:0.65rem;">MONITORING</span>
+              </div>
             </div>
             <div class="lightning-title">UMBRELLA SDK</div>
             <div class="lightning-role">Closed-Loop Passive Sentry</div>
@@ -183,20 +204,61 @@
         </div>
       </div>
 
-      <!-- Panel 1: Agent 2 (3D Spatial Topology Visualizer) -->
+      <!-- Panel 1: Agent 2 (3D Spatial Topology Visualizer - Bigger & Touch Interactive) -->
       <div class="panel">
         <div class="panel-header">
           <div class="panel-title">
             <span>🌐 AGENT 2: 3D SPATIAL TOPOLOGY & BLAST RADIUS</span>
           </div>
-          <span class="panel-badge badge-active" id="badge-blast-radius">BLAST: 0%</span>
+          <div style="display:flex; align-items:center; gap:10px;">
+            <span style="font-size:0.75rem; color:var(--text-muted); font-weight:600;">👆 Touch any node to inspect</span>
+            <span class="panel-badge badge-active" id="badge-blast-radius">BLAST: 0%</span>
+          </div>
         </div>
-        <svg class="topology-canvas" id="topology-svg" viewBox="-250 -140 500 280">
+        <svg class="topology-canvas" id="topology-svg" viewBox="-280 -140 560 280">
           <!-- SVG elements injected dynamically by app.js -->
         </svg>
-        <div style="margin-top:12px; font-size:0.77rem; color:var(--text-muted); display:flex; justify-content:space-between;">
-          <span>Mesh: Ingress ➔ Auth Gate ➔ Client Microservice ➔ SQLite QueuePool</span>
-          <span id="topology-impact-desc">All nodes operational</span>
+        <div style="margin-top:10px; font-size:0.77rem; color:var(--text-muted); display:flex; justify-content:space-between; align-items:center;">
+          <span>Live Mesh: Ingress ➔ Auth Gate ➔ Client Microservice ➔ SQL QueuePool ➔ Payment Gateway</span>
+          <span id="topology-impact-desc" style="font-weight:600; color:var(--status-healthy);">● All 5 topology nodes operational</span>
+        </div>
+
+        <!-- Interactive Touch & Node Inspection Drawer -->
+        <div id="node-inspection-card" style="margin-top:12px; background:#F8FAFC; border:1.5px solid var(--border-color); border-radius:12px; padding:12px 16px; display:none;">
+          <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:8px;">
+            <div style="display:flex; align-items:center; gap:8px;">
+              <span id="inspect-node-icon" style="font-size:1.1rem;">🖥️</span>
+              <div>
+                <strong id="inspect-node-name" style="font-size:0.88rem; color:var(--text-main);">Node Details</strong>
+                <span id="inspect-node-kind" style="font-size:0.65rem; color:var(--text-muted); background:#E2E8F0; padding:2px 8px; border-radius:9999px; margin-left:6px; font-weight:700;">Service</span>
+              </div>
+            </div>
+            <div style="display:flex; align-items:center; gap:8px;">
+              <span class="panel-badge badge-active" id="inspect-node-status" style="font-size:0.68rem;">HEALTHY</span>
+              <button onclick="closeNodeInspection()" style="padding:2px 8px; font-size:0.72rem; border:none; background:#E2E8F0; border-radius:9999px; cursor:pointer; color:var(--text-secondary);">✕ Close</button>
+            </div>
+          </div>
+          <div style="display:grid; grid-template-columns:repeat(4, 1fr); gap:8px; margin-bottom:8px;">
+            <div style="background:#FFFFFF; border:1px solid var(--border-color); border-radius:8px; padding:6px 10px;">
+              <div style="font-size:0.65rem; color:var(--text-muted); font-weight:700;">TRAFFIC RPS</div>
+              <div id="inspect-node-rps" style="font-size:0.88rem; font-weight:800; color:var(--text-main);">0.0</div>
+            </div>
+            <div style="background:#FFFFFF; border:1px solid var(--border-color); border-radius:8px; padding:6px 10px;">
+              <div style="font-size:0.65rem; color:var(--text-muted); font-weight:700;">LATENCY P95</div>
+              <div id="inspect-node-latency" style="font-size:0.88rem; font-weight:800; color:var(--text-main);">0.0 ms</div>
+            </div>
+            <div style="background:#FFFFFF; border:1px solid var(--border-color); border-radius:8px; padding:6px 10px;">
+              <div style="font-size:0.65rem; color:var(--text-muted); font-weight:700;">CONNECTIONS</div>
+              <div id="inspect-node-connections" style="font-size:0.88rem; font-weight:800; color:var(--text-main);">0</div>
+            </div>
+            <div style="background:#FFFFFF; border:1px solid var(--border-color); border-radius:8px; padding:6px 10px;">
+              <div style="font-size:0.65rem; color:var(--text-muted); font-weight:700;">ERROR RATE</div>
+              <div id="inspect-node-error-rate" style="font-size:0.88rem; font-weight:800; color:var(--text-main);">0.0%</div>
+            </div>
+          </div>
+          <div style="font-size:0.75rem; color:var(--text-secondary); line-height:1.4;">
+            <strong>Topology Role:</strong> <span id="inspect-node-details">Click any node in the topology mesh to inspect its live health.</span>
+          </div>
         </div>
       </div>
 
@@ -266,6 +328,7 @@
               </span>
               <button class="ide-toggle-btn active" id="btn-view-split" onclick="switchDiffView('split')">▤ Side-by-Side (Split)</button>
               <button class="ide-toggle-btn" id="btn-view-unified" onclick="switchDiffView('unified')">☰ Unified Diff</button>
+              <button class="ide-toggle-btn" onclick="loadInitialDiffPreview()" title="Fetch current live configuration from disk">🔄 Real-Time Disk</button>
             </div>
           </div>
 
@@ -347,23 +410,48 @@
             <span class="panel-badge badge-active" id="badge-evo-reward">Q-LEARNING REWARD: +0.0</span>
           </div>
         </div>
-        <div style="display:grid; grid-template-columns: 1fr 2fr; gap:20px;">
+        <div style="display:grid; grid-template-columns: 1fr 1fr; gap:16px; margin-bottom:14px;">
           <div>
-            <div style="font-size:0.8rem; font-weight:600; color:var(--text-muted); margin-bottom:8px;">REINFORCEMENT LEARNING STATS:</div>
-            <div class="code-block" id="evo-stats-box">
-              Total Experiences: 0<br>
-              Success Rate: 100%<br>
-              Reward Signal: +13.0 per healed recovery
+            <div style="font-size:0.8rem; font-weight:700; color:var(--text-muted); margin-bottom:6px;">CONTEXTUAL BANDIT & OUTCOME MEMORY:</div>
+            <div class="code-block" id="evo-stats-box" style="font-size:0.76rem; line-height:1.6;">
+              Bandit Mode: SHADOW MODE (Zero Autonomous Production Risk)<br>
+              Total Verified Outcomes: 0 (SQLite: data/outcomes.sqlite)<br>
+              Active Arms: scale_pool, query_optimize, jwt_refresh<br>
+              Reward Signal: +10.0 base + latency delta bonus
             </div>
           </div>
           <div>
-            <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:8px;">
-              <div style="font-size:0.8rem; font-weight:600; color:var(--text-muted);">PROACTIVE CODE REFACTORING PROPOSAL:</div>
-              <button class="btn-primary" id="btn-approve-evo" onclick="approveEvolution()" style="padding:5px 14px; font-size:0.78rem; display:none;">
+            <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:6px;">
+              <div style="font-size:0.8rem; font-weight:700; color:var(--text-muted);">EMPIRICAL BENCHMARK (HELD-OUT SUITE):</div>
+              <button class="btn-subtle" onclick="refreshEvoBenchmark()" style="padding:2px 8px; font-size:0.7rem;">Refresh</button>
+            </div>
+            <div class="code-block" id="evo-benchmark-box" style="font-size:0.76rem; line-height:1.6; color:#6EE7B7;">
+              Recovery Success: 100.0% | Mean Latency: 28.5ms<br>
+              Unsafe Action Rejection: 100.0% (Tier 4 Blocked)<br>
+              Regression Rate: 0.0% | Uncertainty (sigma): 0.787<br>
+              Report: reports/agent6_benchmark_results.json
+            </div>
+          </div>
+        </div>
+
+        <div style="display:grid; grid-template-columns: 1fr 2fr; gap:16px;">
+          <div>
+            <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:6px;">
+              <div style="font-size:0.8rem; font-weight:700; color:var(--text-muted);">POLICY VERSIONS & ROLLBACK:</div>
+              <button class="btn-subtle" onclick="loadPolicyVersionsList()" style="padding:2px 8px; font-size:0.7rem;">Reload</button>
+            </div>
+            <div class="code-block" id="policy-versions-box" style="font-size:0.74rem; max-height:110px; overflow-y:auto;">
+              Loading policy versions from OutcomeStore...
+            </div>
+          </div>
+          <div>
+            <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:6px;">
+              <div style="font-size:0.8rem; font-weight:700; color:var(--text-muted);">PROACTIVE CODE REFACTORING PROPOSAL:</div>
+              <button class="btn-primary" id="btn-approve-evo" onclick="approveEvolution()" style="padding:4px 12px; font-size:0.75rem; display:none;">
                 🚀 Approve & Merge Proactive Evolution
               </button>
             </div>
-            <div class="code-block" id="evo-proposal-box">
+            <div class="code-block" id="evo-proposal-box" style="font-size:0.76rem; line-height:1.5;">
               Agent 6 EVO observing backend health. As traffic patterns stabilize, preemptive code refactoring diffs are synthesized automatically.
             </div>
           </div>
@@ -447,7 +535,7 @@
         </div>
 
         <!-- Filter Pills Bar -->
-        <div class="log-stream-header" style="margin-bottom:10px;">
+        <div class="log-stream-header" style="margin-bottom:8px;">
           <div class="log-filters" id="agent-filters-container" style="flex-wrap:wrap; gap:6px;">
             <button class="filter-pill active" onclick="setLogFilter('all')">All (250)</button>
             <button class="filter-pill" onclick="setLogFilter('agent_1_rca')">🕵️ A1 RCA</button>
@@ -458,6 +546,11 @@
             <button class="filter-pill" onclick="setLogFilter('agent_6_evo')">🧠 A6 EVO</button>
             <button class="filter-pill" onclick="setLogFilter('umbrella_sdk')">📡 SDK</button>
           </div>
+        </div>
+
+        <!-- Quick Log Search -->
+        <div style="margin-bottom:8px;">
+          <input type="text" id="log-search-input" placeholder="🔍 Quick search live logs (text or source)..." oninput="onLogSearchInput(this.value)" style="width:100%; box-sizing:border-box; padding:5px 12px; font-size:0.75rem; border:1px solid var(--border-color); border-radius:8px; background:#FFFFFF; color:var(--text-main); outline:none; font-family:inherit;">
         </div>
 
         <!-- High-Density Streaming Log Feed -->

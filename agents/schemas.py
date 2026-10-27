@@ -241,3 +241,15 @@ class ProactiveRefactorProposal(BaseModel):
     confidence: float
     unified_diff: str
     approved_by_hitl: bool = Field(default=False)
+
+
+# ============================================================================
+# 8. AGENT 6: OUTCOME-AWARE LEARNING & STAGE 1 SCHEMAS
+# ============================================================================
+from agents.agent6_evo.schemas import (
+    IncidentStateFeatures,
+    CandidateActionSpec,
+    OutcomeRecord,
+    PolicyVersionMetadata
+)
+

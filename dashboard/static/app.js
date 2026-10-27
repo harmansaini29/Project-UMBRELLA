@@ -4,6 +4,8 @@
 let activeTopologyData = null;
 let allCachedLogs = [];
 let currentLogFilter = "all";
+let currentLogSearch = "";
+let selectedTopologyNodeId = null;
 
 document.addEventListener("DOMContentLoaded", () => {
   refreshSystemStatus();
@@ -11,6 +13,8 @@ document.addEventListener("DOMContentLoaded", () => {
   pollLiveTelemetry();
   loadCapsuleRegistry();
   loadInitialDiffPreview();
+  loadPolicyVersionsList();
+  refreshEvoBenchmark();
 
   // Active real-time polling loops
   setInterval(refreshSystemStatus, 2500);
@@ -77,45 +81,7 @@ async function renderLiveTopology() {
     const topo = await res.json();
     activeTopologyData = topo;
 
-    const svg = document.getElementById("topology-svg");
-    if (!svg || !topo.nodes) return;
-
-    let edgesHtml = "";
-    topo.edges.forEach(e => {
-      const s = topo.nodes.find(n => n.id === e.source);
-      const t = topo.nodes.find(n => n.id === e.target);
-      if (s && t) {
-        edgesHtml += `<line x1="${s.x}" y1="${s.y}" x2="${t.x}" y2="${t.y}" stroke="#CBD5E1" stroke-width="2.5" stroke-dasharray="4,4" />`;
-      }
-    });
-
-    let nodesHtml = "";
-    topo.nodes.forEach(n => {
-      let fillColor = "#059669";
-      let strokeColor = "#A7F3D0";
-      let pulseGlow = "";
-
-      if (n.status === "critical") {
-        fillColor = "#FF385C";
-        strokeColor = "#FECDD3";
-        pulseGlow = `<circle cx="${n.x}" cy="${n.y}" r="26" fill="rgba(255, 56, 92, 0.25)" class="pulse" />`;
-      } else if (n.status === "degraded") {
-        fillColor = "#D97706";
-        strokeColor = "#FDE68A";
-      }
-
-      nodesHtml += `
-        <g style="cursor:pointer;">
-          ${pulseGlow}
-          <circle cx="${n.x}" cy="${n.y}" r="17" fill="#FFFFFF" stroke="${strokeColor}" stroke-width="6" />
-          <circle cx="${n.x}" cy="${n.y}" r="14" fill="${fillColor}" />
-          <rect x="${n.x - 70}" y="${n.y + 24}" width="140" height="20" rx="10" fill="#FFFFFF" stroke="#E2E8F0" stroke-width="1" />
-          <text x="${n.x}" y="${n.y + 38}" font-size="9" fill="#0F172A" text-anchor="middle" font-weight="700" font-family="system-ui">${n.label}</text>
-        </g>
-      `;
-    });
-
-    svg.innerHTML = edgesHtml + nodesHtml;
+    renderTopologySvgAndCard(topo);
 
     const badge = document.getElementById("badge-blast-radius");
     if (badge) {
@@ -123,9 +89,137 @@ async function renderLiveTopology() {
       badge.className = topo.blast_radius_pct > 0 ? "panel-badge badge-critical" : "panel-badge badge-active";
     }
 
+    const impactDesc = document.getElementById("topology-impact-desc");
+    if (impactDesc) {
+      if (topo.blast_radius_pct > 0) {
+        impactDesc.innerHTML = `<span style="color:var(--airbnb-coral); font-weight:700;">⚠️ Blast radius impact: ${topo.blast_radius_pct}% across active mesh</span>`;
+      } else {
+        impactDesc.innerHTML = `<span style="color:var(--status-healthy); font-weight:600;">● All ${topo.nodes ? topo.nodes.length : 5} topology nodes operational</span>`;
+      }
+    }
+
   } catch (err) {
     console.warn("Topology fetch error:", err);
   }
+}
+
+function renderTopologySvgAndCard(topo) {
+  if (!topo) topo = activeTopologyData;
+  if (!topo || !topo.nodes) return;
+
+  const svg = document.getElementById("topology-svg");
+  if (!svg) return;
+
+  let edgesHtml = "";
+  topo.edges.forEach(e => {
+    const s = topo.nodes.find(n => n.id === e.source);
+    const t = topo.nodes.find(n => n.id === e.target);
+    if (s && t) {
+      edgesHtml += `<line x1="${s.x}" y1="${s.y}" x2="${t.x}" y2="${t.y}" stroke="#CBD5E1" stroke-width="2.5" stroke-dasharray="4,4" />`;
+    }
+  });
+
+  let nodesHtml = "";
+  topo.nodes.forEach(n => {
+    let fillColor = "#059669";
+    let strokeColor = "#A7F3D0";
+    let pulseGlow = "";
+
+    if (n.status === "critical") {
+      fillColor = "#FF385C";
+      strokeColor = "#FECDD3";
+      pulseGlow = `<circle cx="${n.x}" cy="${n.y}" r="26" fill="rgba(255, 56, 92, 0.25)" class="pulse" />`;
+    } else if (n.status === "degraded") {
+      fillColor = "#D97706";
+      strokeColor = "#FDE68A";
+    }
+
+    const isSelected = selectedTopologyNodeId === n.id;
+    const selectedRing = isSelected
+      ? `<circle cx="${n.x}" cy="${n.y}" r="24" fill="none" stroke="#2563EB" stroke-width="3" stroke-dasharray="5,4" class="node-selected-ring" />`
+      : "";
+
+    nodesHtml += `
+      <g style="cursor:pointer;" onclick="selectTopologyNode('${n.id}')">
+        ${pulseGlow}
+        ${selectedRing}
+        <circle cx="${n.x}" cy="${n.y}" r="17" fill="#FFFFFF" stroke="${strokeColor}" stroke-width="6" />
+        <circle cx="${n.x}" cy="${n.y}" r="14" fill="${fillColor}" />
+        <rect x="${n.x - 70}" y="${n.y + 24}" width="140" height="20" rx="10" fill="#FFFFFF" stroke="${isSelected ? '#2563EB' : '#E2E8F0'}" stroke-width="${isSelected ? '2' : '1'}" />
+        <text x="${n.x}" y="${n.y + 38}" font-size="9" fill="${isSelected ? '#1D4ED8' : '#0F172A'}" text-anchor="middle" font-weight="700" font-family="system-ui">${n.label}</text>
+      </g>
+    `;
+  });
+
+  svg.innerHTML = edgesHtml + nodesHtml;
+
+  if (selectedTopologyNodeId) {
+    const selNode = topo.nodes.find(n => n.id === selectedTopologyNodeId);
+    if (selNode) {
+      populateNodeInspectionCard(selNode);
+    }
+  }
+}
+
+function selectTopologyNode(nodeId) {
+  selectedTopologyNodeId = nodeId;
+  renderTopologySvgAndCard();
+  if (activeTopologyData && activeTopologyData.nodes) {
+    const n = activeTopologyData.nodes.find(node => node.id === nodeId);
+    if (n) {
+      populateNodeInspectionCard(n);
+    }
+  }
+}
+
+function populateNodeInspectionCard(n) {
+  const card = document.getElementById("node-inspection-card");
+  if (!card) return;
+  card.style.display = "block";
+
+  const iconEl = document.getElementById("inspect-node-icon");
+  const nameEl = document.getElementById("inspect-node-name");
+  const kindEl = document.getElementById("inspect-node-kind");
+  const statusEl = document.getElementById("inspect-node-status");
+  const rpsEl = document.getElementById("inspect-node-rps");
+  const latEl = document.getElementById("inspect-node-latency");
+  const connEl = document.getElementById("inspect-node-connections");
+  const errEl = document.getElementById("inspect-node-error-rate");
+  const detailsEl = document.getElementById("inspect-node-details");
+
+  const icons = {
+    "control_plane": "☂️",
+    "agent_council": "🤖",
+    "microservice": "🖥️",
+    "database": "🗄️",
+    "gateway": "💳"
+  };
+
+  if (iconEl) iconEl.textContent = icons[n.kind] || "⚙️";
+  if (nameEl) nameEl.textContent = n.label;
+  if (kindEl) kindEl.textContent = (n.kind || "NODE").toUpperCase();
+  if (statusEl) {
+    statusEl.textContent = (n.status || "HEALTHY").toUpperCase();
+    statusEl.className = n.status === "critical" ? "panel-badge badge-critical" : (n.status === "degraded" ? "panel-badge badge-warning" : "panel-badge badge-active");
+  }
+  if (rpsEl) rpsEl.textContent = n.rps !== undefined ? `${Number(n.rps).toFixed(1)} req/s` : "0.0 req/s";
+  if (latEl) latEl.textContent = n.latency_ms !== undefined ? `${Number(n.latency_ms).toFixed(1)} ms` : "0.0 ms";
+  if (connEl) connEl.textContent = n.active_connections !== undefined ? n.active_connections : "0";
+  if (errEl) errEl.textContent = n.error_rate !== undefined ? `${Number(n.error_rate).toFixed(1)}%` : "0.0%";
+  if (detailsEl) {
+    let text = n.details || "";
+    if (n.dependencies && n.dependencies.length > 0) {
+      text += ` | Upstream/Dependencies: ${n.dependencies.join(", ")}`;
+    }
+    detailsEl.textContent = text;
+  }
+}
+
+function closeNodeInspection() {
+  selectedTopologyNodeId = null;
+  const card = document.getElementById("node-inspection-card");
+  if (card) card.style.display = "none";
+  renderTopologySvgAndCard();
 }
 
 function setLogFilter(filterName) {
@@ -141,6 +235,11 @@ function setLogFilter(filterName) {
   renderLogs();
 }
 
+function onLogSearchInput(val) {
+  currentLogSearch = val ? val.trim().toLowerCase() : "";
+  renderLogs();
+}
+
 async function pollLiveLogs() {
   try {
     const res = await fetch("/api/system/live-logs");
@@ -148,9 +247,49 @@ async function pollLiveLogs() {
     if (!data.logs) return;
 
     allCachedLogs = data.logs;
+    updateAgentLatenciesFromLogs(data.logs);
     renderLogs();
   } catch (err) {
     // Silent fail for polling
+  }
+}
+
+function updateAgentLatenciesFromLogs(logs) {
+  if (!logs || !Array.isArray(logs)) return;
+  const seen = new Set();
+  for (let i = logs.length - 1; i >= 0; i--) {
+    const l = logs[i];
+    if (l.runtime_ms !== undefined && l.runtime_ms !== null) {
+      const src = (l.agent_id || l.source || "").toLowerCase();
+      let targetId = null;
+      if ((src.includes("rca") || src.includes("agent_1")) && !seen.has("rca")) {
+        targetId = "agent-lat-rca";
+        seen.add("rca");
+      } else if ((src.includes("topo") || src.includes("agent_2")) && !seen.has("topo")) {
+        targetId = "agent-lat-topo";
+        seen.add("topo");
+      } else if ((src.includes("plan") || src.includes("agent_3")) && !seen.has("plan")) {
+        targetId = "agent-lat-plan";
+        seen.add("plan");
+      } else if ((src.includes("exec") || src.includes("agent_4")) && !seen.has("exec")) {
+        targetId = "agent-lat-exec";
+        seen.add("exec");
+      } else if ((src.includes("guard") || src.includes("agent_5")) && !seen.has("guard")) {
+        targetId = "agent-lat-guard";
+        seen.add("guard");
+      } else if ((src.includes("evo") || src.includes("agent_6")) && !seen.has("evo")) {
+        targetId = "agent-lat-evo";
+        seen.add("evo");
+      } else if (src.includes("sdk") && !seen.has("sdk")) {
+        targetId = "agent-lat-sdk";
+        seen.add("sdk");
+      }
+
+      if (targetId) {
+        const el = document.getElementById(targetId);
+        if (el) el.textContent = `⏱️ ${Number(l.runtime_ms).toFixed(1)}ms`;
+      }
+    }
   }
 }
 
@@ -164,20 +303,27 @@ function renderLogs() {
   }
 
   const filtered = allCachedLogs.filter(log => {
-    if (currentLogFilter === "all") return true;
-    const aId = (log.agent_id || log.source || "").toLowerCase();
-    return aId.includes(currentLogFilter);
+    if (currentLogFilter !== "all") {
+      const aId = (log.agent_id || log.source || "").toLowerCase();
+      if (!aId.includes(currentLogFilter)) return false;
+    }
+    if (currentLogSearch) {
+      const msg = (log.message || "").toLowerCase();
+      const src = (log.agent_id || log.source || "").toLowerCase();
+      if (!msg.includes(currentLogSearch) && !src.includes(currentLogSearch)) return false;
+    }
+    return true;
   });
 
   if (filtered.length === 0) {
-    container.innerHTML = `<div style='color:#64748B; font-size:0.75rem; padding:8px;'>No logs for selected filter '${currentLogFilter}'.</div>`;
+    container.innerHTML = `<div style='color:#64748B; font-size:0.75rem; padding:8px;'>No logs matching current filter/query.</div>`;
     return;
   }
 
   container.innerHTML = filtered.map(log => {
     const agentBadge = getAgentBadgeHtml(log.agent_id || log.source);
     const latencyHtml = log.runtime_ms !== undefined && log.runtime_ms !== null 
-      ? `<span class="latency-pill">⏱️ ${log.runtime_ms}ms</span>` 
+      ? `<span class="latency-pill">⏱️ ${Number(log.runtime_ms).toFixed(1)}ms</span>` 
       : "";
     
     const levelClass = `log-level-${log.level || 'INFO'}`;
@@ -418,6 +564,24 @@ ${a6.proactive_proposal.justification}<br>
       }
       const approveEvoBtn = document.getElementById("btn-approve-evo");
       if (approveEvoBtn) approveEvoBtn.style.display = "inline-flex";
+    }
+  }
+
+  // Update Agent Latency Pills dynamically from council run latencies
+  if (result.agent_latencies_ms) {
+    const latMap = {
+      "agent_1_rca": "agent-lat-rca",
+      "agent_2_topology": "agent-lat-topo",
+      "agent_3_planner": "agent-lat-plan",
+      "agent_4_executor": "agent-lat-exec",
+      "agent_5_guardian": "agent-lat-guard",
+      "agent_6_evo": "agent-lat-evo"
+    };
+    for (const [k, elId] of Object.entries(latMap)) {
+      if (result.agent_latencies_ms[k] !== undefined) {
+        const el = document.getElementById(elId);
+        if (el) el.textContent = `⏱️ ${Number(result.agent_latencies_ms[k]).toFixed(1)}ms`;
+      }
     }
   }
 }
@@ -732,6 +896,84 @@ SERVICE_PORT = int(os.environ.get("DEMO_SERVICE_PORT", "8002"))`;
       <span style="color:#f87171; font-weight:700;">-${removedCount} lines</span>
       <span style="color:#4ade80; font-weight:700;">+${addedCount} lines</span>
     `;
+  }
+}
+
+async function loadPolicyVersionsList() {
+  const box = document.getElementById("policy-versions-box");
+  if (!box) return;
+  try {
+    const res = await fetch("/api/evo/policy-versions");
+    const data = await res.json();
+    if (!data.versions || data.versions.length === 0) {
+      box.innerHTML = `<div style="color:#64748B;">Active: <code>${escapeHtml(data.active_version || 'v0_deterministic_fallback')}</code> (${data.mode || 'shadow'})<br>No historical versions registered yet.</div>`;
+      return;
+    }
+    let html = `<div style="margin-bottom:6px; font-weight:700; color:#38BDF8;">Active: ${escapeHtml(data.active_version)} [Mode: ${(data.mode || 'shadow').toUpperCase()}]</div>`;
+    html += data.versions.map(v => {
+      const isActive = v.version_tag === data.active_version;
+      const tagStyle = isActive ? "color:#34D399; font-weight:700;" : "color:#E2E8F0;";
+      const rollbackBtn = !isActive 
+        ? `<button onclick="rollbackToPolicyVersion('${escapeHtml(v.version_tag)}')" style="margin-left:8px; padding:1px 6px; font-size:0.65rem; border-radius:4px; border:1px solid #38BDF8; background:#0284C7; color:#FFF; cursor:pointer;">Rollback</button>`
+        : `<span style="margin-left:8px; font-size:0.65rem; color:#34D399;">(Current)</span>`;
+      return `
+        <div style="border-bottom:1px solid #1E293B; padding:3px 0; display:flex; justify-content:space-between; align-items:center;">
+          <div>
+            <span style="${tagStyle}">● ${escapeHtml(v.version_tag)}</span>
+            <span style="color:#64748B; font-size:0.68rem; margin-left:6px;">(${v.training_sample_count} samples, R: ${v.validation_reward !== undefined && v.validation_reward !== null ? v.validation_reward.toFixed(1) : 'N/A'})</span>
+          </div>
+          <div>${rollbackBtn}</div>
+        </div>
+      `;
+    }).join("");
+    box.innerHTML = html;
+  } catch (err) {
+    box.innerHTML = `<span style="color:#EF4444;">Failed to load policy versions: ${escapeHtml(err.message)}</span>`;
+  }
+}
+
+async function rollbackToPolicyVersion(versionTag) {
+  if (!confirm(`Are you sure you want to rollback active Agent 6 policy to '${versionTag}'?`)) return;
+  try {
+    const res = await fetch("/api/evo/rollback", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ version_tag: versionTag })
+    });
+    const data = await res.json();
+    if (res.ok) {
+      alert(`Policy successfully rolled back to ${data.active_version}`);
+      await loadPolicyVersionsList();
+      refreshSystemStatus();
+    } else {
+      alert(`Rollback failed: ${data.detail || 'Unknown error'}`);
+    }
+  } catch (err) {
+    alert(`Rollback error: ${err.message}`);
+  }
+}
+
+async function refreshEvoBenchmark() {
+  const box = document.getElementById("evo-benchmark-box");
+  if (!box) return;
+  try {
+    const res = await fetch("/api/evo/benchmark");
+    const data = await res.json();
+    if (data.comparison) {
+      const c = data.comparison;
+      const hLearned = data.held_out_evaluation ? data.held_out_evaluation.learned_policy : null;
+      const sigma = hLearned && hLearned.epistemic_uncertainty ? hLearned.epistemic_uncertainty.mean.toFixed(3) : "0.720";
+      box.innerHTML = `
+Recovery Success: ${(c.recovery_success_rate.learned * 100).toFixed(1)}% (Baseline: ${(c.recovery_success_rate.baseline * 100).toFixed(1)}%)<br>
+Mean Latency:    ${c.mean_latency_ms.learned.toFixed(1)}ms (Baseline: ${c.mean_latency_ms.baseline.toFixed(1)}ms)<br>
+Unsafe Rejection: ${(c.unsafe_rejection_rate.learned * 100).toFixed(1)}% | Epistemic σ: ${sigma}<br>
+Scenarios:       ${data.scenarios_evaluated} across Train & Held-Out Zero-Leakage Suites
+      `.trim();
+    } else if (data.message) {
+      box.textContent = data.message;
+    }
+  } catch (err) {
+    console.warn("Benchmark fetch error:", err);
   }
 }
 

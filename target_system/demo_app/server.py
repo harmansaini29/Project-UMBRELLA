@@ -110,7 +110,28 @@ def pay_rent(req: PaymentRequest, db: Session = Depends(get_db)):
     }
 
 
+@app.post("/api/config/reload")
+def reload_config():
+    """Hot-reloads config.py and recreates SQLAlchemy connection pool after UMBRELLA patch application."""
+    import importlib
+    import target_system.demo_app.config as cfg
+    importlib.reload(cfg)
+    import target_system.demo_app.database as db_mod
+    importlib.reload(db_mod)
+    db_mod.init_db()
+    global engine
+    engine = db_mod.engine
+    return {
+        "status": "reloaded",
+        "service": "demo_booking_service",
+        "pool_size": cfg.POOL_SIZE,
+        "max_overflow": cfg.MAX_OVERFLOW,
+        "pool_timeout": cfg.POOL_TIMEOUT
+    }
+
+
 @app.post("/reset")
 def reset_db():
     init_db()
     return {"message": "Database and connection pool reset successfully."}
+

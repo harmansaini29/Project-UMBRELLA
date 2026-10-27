@@ -16,6 +16,7 @@ Thumbs.db
 *.sqlite
 *.db
 .umbrella_backups/
+data/test_evo_run/
 
 # Binary storage capsules
 capsules/*.tar.gz
