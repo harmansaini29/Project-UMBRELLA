@@ -136,13 +136,28 @@ class TopologyVisualizer:
 
     def update_from_rca(self, rca: RCAResult) -> Tuple[BlastRadiusReport, Dict[str, Any]]:
         """
-        Updates topology state from Agent 1 RCA diagnosis.
+        Updates topology state from Agent 1 RCA diagnosis with dynamic semantic resolution.
         """
         root_component = "payment_service"
+        sub_comp = ""
         if rca.primary_causes:
-            root_component = rca.primary_causes[0].source_component.split(".")[0]
+            full_comp = rca.primary_causes[0].source_component
+            parts = full_comp.split(".")
+            root_component = parts[0]
+            if len(parts) > 1:
+                sub_comp = parts[1]
 
-        blast_report = self.compute_blast_radius(root_component, rca.incident_id)
+        # Semantic mapping to topological graph
+        if "auth" in sub_comp or "jwt" in sub_comp:
+            target_node = "auth_service"
+        elif "validator" in sub_comp or "ingress" in sub_comp:
+            target_node = "api_gateway"
+        elif "karamstay" in root_component or "demo" in root_component or "payment" in root_component:
+            target_node = "payment_service"
+        else:
+            target_node = root_component
+
+        blast_report = self.compute_blast_radius(target_node, rca.incident_id)
 
         topology_snapshot = {
             "incident_id": rca.incident_id,

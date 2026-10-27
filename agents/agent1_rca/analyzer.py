@@ -162,9 +162,27 @@ class RootCauseAnalyzer:
                     target_file=target_file_path,
                     line_number=failing_line,
                     remediation_suggestion=(
-                        "Scale DB_POOL_SIZE from 2 to 10 and DB_MAX_OVERFLOW from 0 to 5 "
-                        "in target_system/payment_service/config.py, then trigger graceful connection pool refresh."
+                        "Scale DB_POOL_SIZE / POOL_SIZE from 2 to 10 and MAX_OVERFLOW from 0 to 5 "
+                        "in service config.py, then trigger graceful connection pool refresh."
                     )
+                )
+            )
+        elif "SQLite Exclusive Lock" in matrix.dominant_bottleneck:
+            primary_causes.append(
+                RootCause(
+                    cause="Database lock contention: SQLite exclusive write lock timed out during concurrent bookings.",
+                    confidence=matrix.aggregate_confidence,
+                    impact_level=matrix.impact_level,
+                    supporting_signals={
+                        "failing_exception": incident.errors[0].error_type if incident.errors else "OperationalError",
+                        "error_message": incident.errors[0].error_message if incident.errors else "database is locked",
+                        "lock_type": "EXCLUSIVE",
+                        "ast_inspected_file": target_file_path
+                    },
+                    source_component=f"{incident.service_name}.database_storage",
+                    target_file=target_file_path,
+                    line_number=failing_line,
+                    remediation_suggestion="Enable PRAGMA busy_timeout = 15000 and WAL journal mode in database connection settings."
                 )
             )
         elif "Authentication" in matrix.dominant_bottleneck:
@@ -180,7 +198,40 @@ class RootCauseAnalyzer:
                     source_component=f"{incident.service_name}.auth_middleware",
                     target_file=target_file_path,
                     line_number=failing_line,
-                    remediation_suggestion="Refresh expired JWT credentials or verify asymmetric signature secrets in auth handler."
+                    remediation_suggestion="Configure JWT clock skew leeway tolerance (300s) and enable auto-refresh fallback in config.py."
+                )
+            )
+        elif "Gateway Timeout" in matrix.dominant_bottleneck:
+            primary_causes.append(
+                RootCause(
+                    cause="External upstream gateway timeout: 3rd-party payment aggregator socket timed out without backoff retry.",
+                    confidence=matrix.aggregate_confidence,
+                    impact_level=matrix.impact_level,
+                    supporting_signals={
+                        "failing_exception": incident.errors[0].error_type if incident.errors else "HTTPException",
+                        "error_message": incident.errors[0].error_message if incident.errors else "504 Gateway Timeout",
+                        "upstream_status": 504
+                    },
+                    source_component=f"{incident.service_name}.payment_gateway_client",
+                    target_file=target_file_path,
+                    line_number=failing_line,
+                    remediation_suggestion="Increase socket timeout to 5.0s, configure 3 exponential retries, and arm circuit breaker in config.py."
+                )
+            )
+        elif "Schema Validation" in matrix.dominant_bottleneck:
+            primary_causes.append(
+                RootCause(
+                    cause="Payload schema validation failure: Malformed request body or uncoerced input fields rejected with 422.",
+                    confidence=matrix.aggregate_confidence,
+                    impact_level=matrix.impact_level,
+                    supporting_signals={
+                        "failing_exception": incident.errors[0].error_type if incident.errors else "HTTPException",
+                        "error_message": incident.errors[0].error_message if incident.errors else "422 Unprocessable Entity"
+                    },
+                    source_component=f"{incident.service_name}.payload_validator",
+                    target_file=target_file_path,
+                    line_number=failing_line,
+                    remediation_suggestion="Configure schema field default coercers and relaxed boundary sanitization in config.py."
                 )
             )
         else:

@@ -48,18 +48,42 @@ class SoftwareSignalCorrelator:
         # Signal 1: Exception & Stack Trace AST Analysis (Weight: 0.35)
         # ----------------------------------------------------
         sig1 = SignalAnalysisResult(signal_name="stack_trace_ast", weight=0.35, confidence_contribution=0.0)
-        has_timeout = False
-        has_auth_err = False
+        is_pool_starvation = False
+        is_sqlite_lock = False
+        is_jwt_auth = False
+        is_gateway_timeout = False
+        is_schema_corruption = False
+
         for err in errors:
             msg = (err.error_type + " " + err.error_message).lower()
-            if "timeout" in msg or "pool" in msg or "queuepool" in msg:
-                has_timeout = True
+            if "queuepool" in msg or ("pool" in msg and ("limit" in msg or "exhausted" in msg or "overflow" in msg)):
+                is_pool_starvation = True
                 sig1.detected_anomalies.append(f"Connection pool exhaustion: {err.error_type}")
                 sig1.raw_evidence["exception"] = err.error_type
                 sig1.raw_evidence["message"] = err.error_message
-            elif "401" in msg or "jwt" in msg or "auth" in msg or "unauthorized" in msg:
-                has_auth_err = True
-                sig1.detected_anomalies.append(f"Authentication failure: {err.error_type}")
+            elif "database is locked" in msg or "operationalerror" in msg or "sqlite" in msg and "locked" in msg:
+                is_sqlite_lock = True
+                sig1.detected_anomalies.append(f"SQLite Exclusive Lock Contention: {err.error_type}")
+                sig1.raw_evidence["exception"] = err.error_type
+                sig1.raw_evidence["message"] = err.error_message
+            elif "504" in msg or "gateway timeout" in msg or "aggregator unresponsive" in msg:
+                is_gateway_timeout = True
+                sig1.detected_anomalies.append(f"Upstream Gateway Timeout: {err.error_type}")
+                sig1.raw_evidence["exception"] = err.error_type
+                sig1.raw_evidence["message"] = err.error_message
+            elif "401" in msg or "jwt" in msg or "auth" in msg or "unauthorized" in msg or "permissionerror" in msg:
+                is_jwt_auth = True
+                sig1.detected_anomalies.append(f"Authentication Token Cascade: {err.error_type}")
+                sig1.raw_evidence["exception"] = err.error_type
+                sig1.raw_evidence["message"] = err.error_message
+            elif "422" in msg or "unprocessable" in msg or "schema" in msg or "valueerror" in msg:
+                is_schema_corruption = True
+                sig1.detected_anomalies.append(f"Payload Validation Corruption: {err.error_type}")
+                sig1.raw_evidence["exception"] = err.error_type
+                sig1.raw_evidence["message"] = err.error_message
+            elif "timeout" in msg:
+                is_pool_starvation = True
+                sig1.detected_anomalies.append(f"Concurrency Timeout: {err.error_type}")
                 sig1.raw_evidence["exception"] = err.error_type
                 sig1.raw_evidence["message"] = err.error_message
 
@@ -144,14 +168,26 @@ class SoftwareSignalCorrelator:
         matrix.aggregate_confidence = round(min(0.99, max(0.10, total_conf)), 4)
 
         # Determine dominant bottleneck
-        if has_timeout or (telemetry and telemetry.pool_utilization_pct >= 100.0):
+        if is_pool_starvation or (telemetry and telemetry.pool_utilization_pct >= 100.0):
             matrix.dominant_bottleneck = "Database Connection Pool Starvation under Concurrent Inflow"
             matrix.impact_level = ImpactLevel.CRITICAL
             matrix.suggested_risk_tier = ActionRiskTier.TIER_2_CONFIG_RESTART
-        elif has_auth_err:
+        elif is_sqlite_lock:
+            matrix.dominant_bottleneck = "SQLite Exclusive Lock Contention under Concurrent Writes"
+            matrix.impact_level = ImpactLevel.HIGH
+            matrix.suggested_risk_tier = ActionRiskTier.TIER_2_CONFIG_RESTART
+        elif is_jwt_auth:
             matrix.dominant_bottleneck = "Authentication / Authorization Token Validation Rejection"
             matrix.impact_level = ImpactLevel.HIGH
             matrix.suggested_risk_tier = ActionRiskTier.TIER_3_CODE_PATCH
+        elif is_gateway_timeout:
+            matrix.dominant_bottleneck = "Upstream Payment Gateway Timeout & Circuit Breaker Trip"
+            matrix.impact_level = ImpactLevel.HIGH
+            matrix.suggested_risk_tier = ActionRiskTier.TIER_2_CONFIG_RESTART
+        elif is_schema_corruption:
+            matrix.dominant_bottleneck = "Payload Schema Validation Corruption"
+            matrix.impact_level = ImpactLevel.MEDIUM
+            matrix.suggested_risk_tier = ActionRiskTier.TIER_2_CONFIG_RESTART
         else:
             matrix.dominant_bottleneck = "Unhandled System Runtime Exception"
             matrix.impact_level = ImpactLevel.MEDIUM

@@ -69,6 +69,27 @@ class EvolutionPolicyEngine:
         else:
             return -15.0
 
+    def _get_state_key(self, incident: IncidentContext) -> str:
+        """Derives a fine-grained state signature from incident error type and message."""
+        err = incident.errors[0] if incident.errors else None
+        err_type = err.error_type if err else "default"
+        err_msg = (err.error_message or "").lower() if err else ""
+
+        if "504" in err_msg or "gateway" in err_msg or "aggregator" in err_msg:
+            sub_sig = "GatewayTimeout"
+        elif "queuepool" in err_msg or "pool" in err_msg:
+            sub_sig = "QueuePool"
+        elif "locked" in err_msg or "operationalerror" in err_msg or "database is locked" in err_msg:
+            sub_sig = "LockContention"
+        elif "401" in err_msg or "jwt" in err_msg or "unauthorized" in err_msg or "permission" in err_msg:
+            sub_sig = "JWTAuth"
+        elif "422" in err_msg or "schema" in err_msg or "validation" in err_msg or "corrupt" in err_msg:
+            sub_sig = "SchemaValidation"
+        else:
+            sub_sig = err_type
+
+        return f"{incident.service_name}:{err_type}:{sub_sig}"
+
     def record_experience(
         self,
         incident: IncidentContext,
@@ -79,7 +100,7 @@ class EvolutionPolicyEngine:
         """
         Ingests real outcome from Agent 4 execution and updates the RL policy.
         """
-        state_key = f"{incident.service_name}:{incident.errors[0].error_type if incident.errors else 'default'}"
+        state_key = self._get_state_key(incident)
         action_key = action.action_id
 
         # Calculate reward
@@ -124,7 +145,7 @@ class EvolutionPolicyEngine:
         """
         Ranks candidate remediation actions based on learned historical Q-values.
         """
-        state_key = f"{incident.service_name}:{incident.errors[0].error_type if incident.errors else 'default'}"
+        state_key = self._get_state_key(incident)
         state_scores = self.q_table.get(state_key, {})
 
         def score_action(action: RemediationAction) -> float:
