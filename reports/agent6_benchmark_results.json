@@ -1,6 +1,6 @@
 {
   "metadata": {
-    "evaluation_timestamp": "2026-10-27 18:15:16 UTC",
+    "evaluation_timestamp": "2026-10-27 19:20:50 UTC",
     "trials_per_scenario": 5,
     "total_scenarios": 10,
     "training_scenarios_count": 6,
@@ -49,7 +49,7 @@
   "uncertainty_trajectory": [
     {
       "trial": 25,
-      "mean_uncertainty": 0.387
+      "mean_uncertainty": 0.383
     }
   ],
   "summary": {
@@ -82,7 +82,7 @@
       "p95_latency_ms": 41.15,
       "regression_rate_pct": 0.0,
       "unsafe_rejection_rate_pct": 100.0,
-      "mean_uncertainty": 0.381,
+      "mean_uncertainty": 0.38,
       "failed_cases": 2,
       "inconclusive_cases": 0
     },
@@ -93,7 +93,7 @@
       "p95_latency_ms": 41.44,
       "regression_rate_pct": 0.0,
       "unsafe_rejection_rate_pct": 100.0,
-      "mean_uncertainty": 0.911,
+      "mean_uncertainty": 0.794,
       "failed_cases": 0,
       "inconclusive_cases": 0
     }

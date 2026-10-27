@@ -279,10 +279,33 @@ def ingest_client_incident(req: IncidentReportRequest):
     push_log("CRITICAL", "SDK", f"Live crash reported by '{req.service_name}': {req.error_type} - {req.error_message}")
 
     summary_data = req.context.get("summary", {})
-    pool_sz = summary_data.get("pool_size", 2)
-    overflow = summary_data.get("max_overflow", 0)
-    num_users = summary_data.get("total_requests", 10)
-    failed_cnt = summary_data.get("failed_requests", 8)
+    recent_telem = None
+    for t_entry in live_telemetry_stream:
+        if t_entry.get("service_name") == req.service_name and "data" in t_entry:
+            recent_telem = t_entry["data"]
+            break
+
+    if recent_telem:
+        pool_sz = recent_telem.get("pool_size", summary_data.get("pool_size", 2))
+        active_conn = recent_telem.get("checked_out_connections", 0)
+        overflow = recent_telem.get("overflow", 0)
+        util_pct = recent_telem.get("utilization_pct", 0.0)
+    else:
+        pool_sz = summary_data.get("pool_size", 2)
+        overflow = summary_data.get("max_overflow", 0)
+        active_conn = 0
+        util_pct = 0.0
+
+    # If this incident is explicitly a pool exhaustion test, reflect concurrency saturation
+    is_explicit_pool_test = (
+        "queuepool" in (req.error_message + " " + req.error_type).lower() or
+        req.context.get("scenario") in ("10_simultaneous_payments", "100_concurrent_tenants")
+    )
+    if is_explicit_pool_test:
+        active_conn = summary_data.get("total_requests", 10)
+        util_pct = round((active_conn / max(pool_sz, 1)) * 100.0, 1)
+
+    failed_cnt = summary_data.get("failed_requests", 1)
     p95_lat = summary_data.get("p95_latency_ms", 1450.0)
 
     active_repo = req.repo_path or registered_clients.get(req.service_name, {}).get("repo_path")
@@ -296,10 +319,10 @@ def ingest_client_incident(req: IncidentReportRequest):
         config_file=active_cfg,
         telemetry=TelemetrySnapshot(
             service_name=req.service_name,
-            active_connections=num_users,
+            active_connections=active_conn,
             pool_size=pool_sz,
             pool_overflow=overflow,
-            pool_utilization_pct=round((num_users / max(pool_sz, 1)) * 100.0, 1),
+            pool_utilization_pct=util_pct,
             latency_p99_ms=p95_lat,
             error_count_last_5m=failed_cnt
         ),

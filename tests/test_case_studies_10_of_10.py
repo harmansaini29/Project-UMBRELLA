@@ -48,16 +48,24 @@ class TestCaseStudies10Of10(unittest.TestCase):
         cls.results_score = 0
 
     def setUp(self):
-        # Reset internal demo app config
-        cfg_p = os.path.join(WORKSPACE_DIR, "target_system", "demo_app", "config.py")
-        if os.path.exists(cfg_p):
-            with open(cfg_p, "r", encoding="utf-8") as f:
-                c = f.read()
-            c = c.replace('POOL_SIZE = int(os.environ.get("DEMO_POOL_SIZE", "10"))', 'POOL_SIZE = int(os.environ.get("DEMO_POOL_SIZE", "2"))')
-            c = c.replace('POOL_SIZE = 10', 'POOL_SIZE = 2')
-            c = c.replace('MAX_OVERFLOW = 5', 'MAX_OVERFLOW = 0')
-            with open(cfg_p, "w", encoding="utf-8") as f:
-                f.write(c)
+        # Reset internal demo app config and external demo app config
+        for cfg_p in [
+            os.path.join(WORKSPACE_DIR, "target_system", "demo_app", "config.py"),
+            os.path.join(DEMO_APP_DIR, "config.py")
+        ]:
+            if os.path.exists(cfg_p):
+                with open(cfg_p, "r", encoding="utf-8") as f:
+                    c = f.read()
+                c = c.replace('POOL_SIZE = int(os.environ.get("DEMO_POOL_SIZE", "20"))', 'POOL_SIZE = int(os.environ.get("DEMO_POOL_SIZE", "2"))')
+                c = c.replace('POOL_SIZE = int(os.environ.get("DEMO_POOL_SIZE", "10"))', 'POOL_SIZE = int(os.environ.get("DEMO_POOL_SIZE", "2"))')
+                c = c.replace('POOL_SIZE = 20', 'POOL_SIZE = 2')
+                c = c.replace('POOL_SIZE = 10', 'POOL_SIZE = 2')
+                c = c.replace('MAX_OVERFLOW = int(os.environ.get("DEMO_MAX_OVERFLOW", "10"))', 'MAX_OVERFLOW = int(os.environ.get("DEMO_MAX_OVERFLOW", "0"))')
+                c = c.replace('MAX_OVERFLOW = int(os.environ.get("DEMO_MAX_OVERFLOW", "5"))', 'MAX_OVERFLOW = int(os.environ.get("DEMO_MAX_OVERFLOW", "0"))')
+                c = c.replace('MAX_OVERFLOW = 10', 'MAX_OVERFLOW = 0')
+                c = c.replace('MAX_OVERFLOW = 5', 'MAX_OVERFLOW = 0')
+                with open(cfg_p, "w", encoding="utf-8") as f:
+                    f.write(c)
         import importlib
         if "target_system.demo_app.config" in sys.modules:
             importlib.reload(sys.modules["target_system.demo_app.config"])
@@ -66,6 +74,8 @@ class TestCaseStudies10Of10(unittest.TestCase):
             sys.modules["target_system.demo_app.database"].init_db()
         if "target_system.demo_app.load_simulator" in sys.modules:
             importlib.reload(sys.modules["target_system.demo_app.load_simulator"])
+        if "load_simulator" in sys.modules:
+            importlib.reload(sys.modules["load_simulator"])
 
 
     # --------------------------------------------------------------------------
