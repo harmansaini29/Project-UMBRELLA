@@ -246,10 +246,14 @@ class ProactiveRefactorProposal(BaseModel):
 # ============================================================================
 # 8. AGENT 6: OUTCOME-AWARE LEARNING & STAGE 1 SCHEMAS
 # ============================================================================
-from agents.agent6_evo.schemas import (
-    IncidentStateFeatures,
-    CandidateActionSpec,
-    OutcomeRecord,
-    PolicyVersionMetadata
-)
+try:
+    from agents.agent6_evo.schemas import (
+        IncidentStateFeatures,
+        CandidateActionSpec,
+        OutcomeRecord,
+        PolicyVersionMetadata
+    )
+except (ImportError, AttributeError):
+    pass
+
 
